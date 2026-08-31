@@ -41,18 +41,26 @@ type longCaptureActionDecision struct {
 }
 
 func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBorder bool, session *Session) error {
+	region := image.Rect(config.X, config.Y, config.X+config.Width, config.Y+config.Height)
 	var border *selector.Border
 	if showBorder {
 		var borderErr error
-		border, borderErr = selector.ShowBorder(image.Rect(
-			config.X, config.Y, config.X+config.Width, config.Y+config.Height,
-		))
+		border, borderErr = selector.ShowBorder(region)
 		if borderErr != nil {
 			fmt.Fprintf(runner.runtime.Stderr, "警告：无法显示截图区域边框：%v\n", borderErr)
 		} else {
 			defer border.Close()
 		}
 	}
+	shield, shieldErr := selector.ShowMouseShield(region)
+	if shieldErr != nil {
+		fmt.Fprintf(runner.runtime.Stderr, "警告：无法阻止截图区域的鼠标悬停事件：%v\n", shieldErr)
+	}
+	defer func() {
+		if shield != nil {
+			shield.Close()
+		}
+	}()
 
 	diagnostics, diagnosticErr := newDiagnosticWriter(config.DiagnosticDir, config.DiagnosticMax)
 	if diagnosticErr != nil {
@@ -74,7 +82,6 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 		closeDiagnostics(diagnostics)
 		return err
 	}
-	region := image.Rect(config.X, config.Y, config.X+config.Width, config.Y+config.Height)
 	var preview longCapturePreview
 	if longCapturePreviewEnabled(config) {
 		preview, err = selector.ShowPreview(region, builder.Image())
@@ -126,6 +133,10 @@ captureLoop:
 				captureToolbar = nil
 				captureActions = nil
 			}
+			if shield != nil {
+				shield.Close()
+				shield = nil
+			}
 			if action == selector.ActionSaveAs && preview != nil {
 				preview.Close()
 				preview = nil
@@ -143,6 +154,11 @@ captureLoop:
 			}
 			if !decision.finish {
 				fmt.Fprintln(runner.runtime.Stdout, "已取消另存，继续长截图。")
+				shield, shieldErr = selector.ShowMouseShield(region)
+				if shieldErr != nil {
+					fmt.Fprintf(runner.runtime.Stderr, "警告：无法阻止截图区域的鼠标悬停事件：%v\n", shieldErr)
+					shield = nil
+				}
 				preview, err = selector.ShowPreview(region, builder.Image())
 				if err != nil {
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图无法恢复：%v\n", err)
@@ -217,6 +233,10 @@ captureLoop:
 	if preview != nil {
 		preview.Close()
 		preview = nil
+	}
+	if shield != nil {
+		shield.Close()
+		shield = nil
 	}
 
 	if diagnostics != nil {
