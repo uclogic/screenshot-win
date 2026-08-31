@@ -26,27 +26,17 @@ var (
 	procGlobalLock       = clipboardKernel32.NewProc("GlobalLock")
 	procGlobalUnlock     = clipboardKernel32.NewProc("GlobalUnlock")
 	procGlobalFree       = clipboardKernel32.NewProc("GlobalFree")
-	procRtlMoveMemory    = clipboardKernel32.NewProc("RtlMoveMemory")
 )
 
 // CopyImage writes source to the Windows clipboard as CF_DIB.
 func CopyImage(source image.Image) error {
-	dib, err := encodeDIB(source)
+	size, err := dibSize(source)
 	if err != nil {
 		return err
 	}
-	if err := openClipboardWithRetry(); err != nil {
-		return err
-	}
-	defer procCloseClipboard.Call()
-
-	ok, _, callErr := procEmptyClipboard.Call()
-	if ok == 0 {
-		return win32CallError("EmptyClipboard", callErr, "copying selected image")
-	}
-	handle, _, callErr := procGlobalAlloc.Call(gmemMoveable, uintptr(len(dib)))
+	handle, _, callErr := procGlobalAlloc.Call(gmemMoveable, uintptr(size))
 	if handle == 0 {
-		return win32CallError("GlobalAlloc", callErr, fmt.Sprintf("allocating %d clipboard bytes", len(dib)))
+		return win32CallError("GlobalAlloc", callErr, fmt.Sprintf("allocating %d clipboard bytes", size))
 	}
 	owned := true
 	defer func() {
@@ -58,14 +48,27 @@ func CopyImage(source image.Image) error {
 	if memory == 0 {
 		return win32CallError("GlobalLock", callErr, "copying selected image")
 	}
-	procRtlMoveMemory.Call(memory, uintptr(unsafe.Pointer(&dib[0])), uintptr(len(dib)))
+	destination := unsafe.Slice((*byte)(unsafe.Pointer(memory)), size)
+	if err := writeDIB(destination, source); err != nil {
+		procGlobalUnlock.Call(handle)
+		return err
+	}
 	procGlobalUnlock.Call(handle)
+
+	if err := openClipboardWithRetry(); err != nil {
+		return err
+	}
+	defer procCloseClipboard.Call()
+	ok, _, callErr := procEmptyClipboard.Call()
+	if ok == 0 {
+		return win32CallError("EmptyClipboard", callErr, "copying selected image")
+	}
 	stored, _, callErr := procSetClipboardData.Call(cfDIB, handle)
 	if stored == 0 {
 		return win32CallError("SetClipboardData", callErr, "copying selected image")
 	}
 	owned = false
-	runtime.KeepAlive(dib)
+	runtime.KeepAlive(source)
 	return nil
 }
 

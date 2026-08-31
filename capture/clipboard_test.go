@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -44,5 +45,35 @@ func TestEncodeDIBHeaderAndBottomUpPixels(t *testing.T) {
 func TestEncodeDIBRejectsEmptyImage(t *testing.T) {
 	if _, err := encodeDIB(image.NewRGBA(image.Rectangle{})); err == nil {
 		t.Fatal("encodeDIB() accepted an empty image")
+	}
+}
+
+func TestWriteDIBSupportsNonZeroOrigin(t *testing.T) {
+	source := image.NewRGBA(image.Rect(10, 20, 11, 21))
+	source.SetRGBA(10, 20, color.RGBA{R: 1, G: 2, B: 3, A: 4})
+	size, err := dibSize(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := make([]byte, size)
+	if err := writeDIB(destination, source); err != nil {
+		t.Fatal(err)
+	}
+	if got := destination[bitmapInfoHeaderSize:]; !bytes.Equal(got, []byte{3, 2, 1, 255}) {
+		t.Fatalf("DIB pixels = %v, want [3 2 1 255]", got)
+	}
+}
+
+func TestWriteDIBRejectsWrongBufferSize(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	size, err := dibSize(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDIB(make([]byte, size-1), source); err == nil {
+		t.Fatal("writeDIB() accepted a short buffer")
+	}
+	if err := writeDIB(make([]byte, size+1), source); err == nil {
+		t.Fatal("writeDIB() accepted a long buffer")
 	}
 }

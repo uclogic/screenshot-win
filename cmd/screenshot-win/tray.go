@@ -10,14 +10,15 @@ type trayController struct {
 	mu       sync.Mutex
 	run      func(context.Context) error
 	report   func(error)
+	cleanup  func()
 	running  bool
 	exiting  bool
 	cancel   context.CancelFunc
 	finished chan struct{}
 }
 
-func newTrayController(run func(context.Context) error, report func(error)) *trayController {
-	return &trayController{run: run, report: report}
+func newTrayController(run func(context.Context) error, report func(error), cleanup func()) *trayController {
+	return &trayController{run: run, report: report, cleanup: cleanup}
 }
 
 // Trigger starts a capture if the host is idle. Repeated triggers are ignored.
@@ -36,6 +37,9 @@ func (controller *trayController) Trigger() bool {
 
 	go func() {
 		err := controller.run(ctx)
+		if controller.cleanup != nil {
+			controller.cleanup()
+		}
 		controller.mu.Lock()
 		report := controller.report
 		exiting := controller.exiting

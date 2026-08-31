@@ -15,7 +15,7 @@ func TestTrayControllerRejectsRepeatedTriggerAndRecovers(t *testing.T) {
 		calls.Add(1)
 		<-release
 		return nil
-	}, nil)
+	}, nil, nil)
 	if !controller.Trigger() || controller.Trigger() {
 		t.Fatal("first trigger should start and repeated trigger should be ignored")
 	}
@@ -36,15 +36,19 @@ func TestTrayControllerRejectsRepeatedTriggerAndRecovers(t *testing.T) {
 
 func TestTrayControllerShutdownCancelsAndIsIdempotent(t *testing.T) {
 	started := make(chan struct{})
+	var cleaned atomic.Bool
 	controller := newTrayController(func(ctx context.Context) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
-	}, nil)
+	}, nil, func() { cleaned.Store(true) })
 	controller.Trigger()
 	<-started
 	<-controller.Shutdown()
 	<-controller.Shutdown()
+	if !cleaned.Load() {
+		t.Fatal("shutdown completed before cleanup")
+	}
 	if controller.Trigger() {
 		t.Fatal("controller accepted a trigger after shutdown")
 	}
@@ -53,7 +57,14 @@ func TestTrayControllerShutdownCancelsAndIsIdempotent(t *testing.T) {
 func TestTrayControllerReportsWorkerErrorAndRecovers(t *testing.T) {
 	want := errors.New("capture failed")
 	reported := make(chan error, 1)
-	controller := newTrayController(func(context.Context) error { return want }, func(err error) { reported <- err })
+	var cleaned atomic.Bool
+	controller := newTrayController(func(context.Context) error { return want }, func(err error) {
+		if !cleaned.Load() {
+			reported <- errors.New("error was reported before cleanup")
+			return
+		}
+		reported <- err
+	}, func() { cleaned.Store(true) })
 	controller.Trigger()
 	select {
 	case err := <-reported:
@@ -70,6 +81,34 @@ func TestTrayControllerReportsWorkerErrorAndRecovers(t *testing.T) {
 	})
 	if !controller.Trigger() {
 		t.Fatal("controller did not recover after worker error")
+	}
+}
+
+func TestTrayControllerCleansUpBeforeBecomingIdle(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	cleanupRelease := make(chan struct{})
+	controller := newTrayController(func(context.Context) error { return nil }, nil, func() {
+		close(cleanupStarted)
+		<-cleanupRelease
+	})
+	if !controller.Trigger() {
+		t.Fatal("trigger was rejected")
+	}
+	<-cleanupStarted
+	if controller.Trigger() {
+		t.Fatal("controller accepted a trigger while cleanup was running")
+	}
+	shutdown := controller.Shutdown()
+	select {
+	case <-shutdown:
+		t.Fatal("shutdown completed before cleanup")
+	default:
+	}
+	close(cleanupRelease)
+	select {
+	case <-shutdown:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not complete after cleanup")
 	}
 }
 

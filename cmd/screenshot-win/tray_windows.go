@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -168,7 +169,7 @@ func runTrayHost(runner *application.Runner, options launchOptions, settingsPath
 		return runner.RunContext(ctx, host.captureConfig())
 	}, func(err error) {
 		showErrorMessage(host.hwnd, err)
-	})
+	}, debug.FreeOSMemory)
 	return host.run()
 }
 
