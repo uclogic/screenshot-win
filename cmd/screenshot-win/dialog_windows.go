@@ -92,8 +92,9 @@ func choosePNGPathContext(ctx context.Context, owner uintptr, now time.Time) (st
 
 	fileBuffer := make([]uint16, 32768)
 	copy(fileBuffer, syscall.StringToUTF16(suggestedScreenshotName(now)))
-	filter := utf16.Encode([]rune("PNG 图片 (*.png)\x00*.png\x00所有文件 (*.*)\x00*.*\x00\x00"))
-	title, _ := syscall.UTF16PtrFromString("保存截图")
+	language := uiLanguage()
+	filter := utf16.Encode([]rune(localize(language, textPNGFilter)))
+	title, _ := syscall.UTF16PtrFromString(localize(language, textSaveScreenshot))
 	defaultExt, _ := syscall.UTF16PtrFromString("png")
 	dialog := openFileName{
 		Size: uint32(unsafe.Sizeof(openFileName{})), Owner: owner, Filter: &filter[0], FilterIndex: 1,

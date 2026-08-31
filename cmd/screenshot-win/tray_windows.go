@@ -17,8 +17,8 @@ const (
 	trayCallbackMessage = 0x8001
 	trayExitReady       = 0x8002
 	trayCommandCapture  = 1001
-	trayCommandExit     = 1002
-	trayCaptureHotkeyID = 1
+	trayCommandSettings = 1002
+	trayCommandExit     = 1003
 
 	wmDestroy     = 0x0002
 	wmCommand     = 0x0111
@@ -30,6 +30,7 @@ const (
 	ninKeySelect  = 0x0401
 
 	nimAdd        = 0x00000000
+	nimModify     = 0x00000001
 	nimDelete     = 0x00000002
 	nimSetVersion = 0x00000004
 	nifMessage    = 0x00000001
@@ -44,10 +45,7 @@ const (
 
 	idiApplication     = 32512
 	errorAlreadyExists = 183
-	modAlt             = 0x0001
-	modShift           = 0x0004
 	modNoRepeat        = 0x4000
-	vkA                = 0x41
 )
 
 var (
@@ -62,6 +60,7 @@ var (
 	procTrayGetMessage            = trayUser32.NewProc("GetMessageW")
 	procTrayTranslateMessage      = trayUser32.NewProc("TranslateMessage")
 	procTrayDispatchMessage       = trayUser32.NewProc("DispatchMessageW")
+	procTrayIsDialogMessage       = trayUser32.NewProc("IsDialogMessageW")
 	procTrayPostQuitMessage       = trayUser32.NewProc("PostQuitMessage")
 	procTrayPostMessage           = trayUser32.NewProc("PostMessageW")
 	procTrayRegisterHotKey        = trayUser32.NewProc("RegisterHotKey")
@@ -124,17 +123,29 @@ type notifyIconData struct {
 }
 
 type windowsTrayHost struct {
-	hwnd            uintptr
-	instance        uintptr
-	className       *uint16
-	icon            notifyIconData
-	iconAdded       bool
-	taskbarCreated  uint32
-	controller      *trayController
-	shutdownStarted bool
+	hwnd                    uintptr
+	instance                uintptr
+	className               *uint16
+	icon                    notifyIconData
+	iconAdded               bool
+	taskbarCreated          uint32
+	controller              *trayController
+	shutdownStarted         bool
+	settings                *settingsWindow
+	settingsPath            string
+	programDirectory        string
+	preferences             preferences
+	overrides               settingOverrides
+	commandLineConfig       application.Config
+	configMu                sync.RWMutex
+	config                  application.Config
+	activeHotkey            configuredHotkey
+	activeHotkeyID          uintptr
+	startupWarning          error
+	settingsClassRegistered bool
 }
 
-func runTrayHost(runner *application.Runner, config application.Config) error {
+func runTrayHost(runner *application.Runner, options launchOptions, settingsPath string, settingsErr error) error {
 	defer runner.ClosePinnedImages()
 	mutexName, _ := syscall.UTF16PtrFromString(`Local\ScreenshotWin.TrayHost`)
 	mutex, _, mutexErr := procTrayCreateMutex.Call(0, 0, uintptr(unsafe.Pointer(mutexName)))
@@ -143,13 +154,18 @@ func runTrayHost(runner *application.Runner, config application.Config) error {
 	}
 	defer procTrayCloseHandle.Call(mutex)
 	if errno, ok := mutexErr.(syscall.Errno); ok && errno == errorAlreadyExists {
-		showInformationMessage("screenshot-win 已在通知区域运行。")
+		showInformationMessage(localize(options.Preferences.General.Language, textAlreadyRunning))
 		return nil
 	}
 
-	host := &windowsTrayHost{}
+	host := &windowsTrayHost{
+		settingsPath: settingsPath, programDirectory: options.ProgramDirectory,
+		preferences: options.Preferences, overrides: options.Overrides,
+		commandLineConfig: options.CommandLineConfig, config: options.Config,
+		startupWarning: settingsErr,
+	}
 	host.controller = newTrayController(func(ctx context.Context) error {
-		return runner.RunContext(ctx, config)
+		return runner.RunContext(ctx, host.captureConfig())
 	}, func(err error) {
 		showErrorMessage(host.hwnd, err)
 	})
@@ -193,11 +209,15 @@ func (host *windowsTrayHost) run() error {
 			procTrayDestroyWindow.Call(host.hwnd)
 		}
 	}()
-	registered, _, callErr := procTrayRegisterHotKey.Call(hwnd, trayCaptureHotkeyID, modAlt|modShift|modNoRepeat, vkA)
-	if registered == 0 {
-		return trayWin32Error("RegisterHotKey(Alt+Shift+A)", callErr)
+	hotkey, _ := parseConfiguredHotkey(host.preferences.General.Hotkey)
+	if err := host.registerInitialHotkey(hotkey); err != nil {
+		if host.startupWarning == nil {
+			host.startupWarning = err
+		} else {
+			host.startupWarning = fmt.Errorf("%v\n%v", host.startupWarning, err)
+		}
 	}
-	defer procTrayUnregisterHotKey.Call(hwnd, trayCaptureHotkeyID)
+	defer host.unregisterActiveHotkey()
 
 	taskbarName, _ := syscall.UTF16PtrFromString("TaskbarCreated")
 	message, _, callErr := procTrayRegisterWindowMessage.Call(uintptr(unsafe.Pointer(taskbarName)))
@@ -208,6 +228,9 @@ func (host *windowsTrayHost) run() error {
 	if err := host.addIcon(); err != nil {
 		return err
 	}
+	if host.startupWarning != nil {
+		showErrorMessage(host.hwnd, fmt.Errorf("%v\n\n已使用默认设置或保留可用功能。", host.startupWarning))
+	}
 
 	var msg trayMessage
 	for {
@@ -217,6 +240,12 @@ func (host *windowsTrayHost) run() error {
 		}
 		if status == 0 {
 			break
+		}
+		if host.settings != nil && host.settings.hwnd != 0 {
+			handled, _, _ := procTrayIsDialogMessage.Call(host.settings.hwnd, uintptr(unsafe.Pointer(&msg)))
+			if handled != 0 {
+				continue
+			}
 		}
 		procTrayTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		procTrayDispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
@@ -233,7 +262,7 @@ func (host *windowsTrayHost) addIcon() error {
 		Size: uint32(unsafe.Sizeof(notifyIconData{})), Window: host.hwnd, ID: 1,
 		Flags: nifMessage | nifIcon | nifTip, CallbackMessage: trayCallbackMessage, Icon: icon,
 	}
-	copy(host.icon.Tip[:], syscall.StringToUTF16("screenshot-win - Alt+Shift+A 开始截图"))
+	host.setIconTip()
 	ok, _, callErr := procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&host.icon)))
 	if ok == 0 {
 		return trayWin32Error("Shell_NotifyIconW(NIM_ADD)", callErr)
@@ -242,6 +271,24 @@ func (host *windowsTrayHost) addIcon() error {
 	host.icon.Version = notifyVersion
 	procShellNotifyIcon.Call(nimSetVersion, uintptr(unsafe.Pointer(&host.icon)))
 	return nil
+}
+
+func (host *windowsTrayHost) setIconTip() {
+	host.icon.Tip = [128]uint16{}
+	tip := "screenshot-win"
+	if host.activeHotkeyID != 0 {
+		tip += " - " + formatConfiguredHotkey(host.activeHotkey) + " " + localize(host.preferences.General.Language, textStartCapture)
+	}
+	copy(host.icon.Tip[:], syscall.StringToUTF16(tip))
+}
+
+func (host *windowsTrayHost) refreshIconTip() {
+	if !host.iconAdded {
+		return
+	}
+	host.setIconTip()
+	host.icon.Flags = nifMessage | nifIcon | nifTip
+	procShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&host.icon)))
 }
 
 func (host *windowsTrayHost) removeIcon() {
@@ -265,9 +312,15 @@ func (host *windowsTrayHost) showMenu() {
 		return
 	}
 	defer procTrayDestroyMenu.Call(menu)
-	captureText, _ := syscall.UTF16PtrFromString("开始截图\tAlt+Shift+A")
-	exitText, _ := syscall.UTF16PtrFromString("退出")
+	captureLabel := localize(host.preferences.General.Language, textStartCapture)
+	captureText, _ := syscall.UTF16PtrFromString(captureLabel)
+	if host.activeHotkeyID != 0 {
+		captureText, _ = syscall.UTF16PtrFromString(captureLabel + "\t" + formatConfiguredHotkey(host.activeHotkey))
+	}
+	settingsText, _ := syscall.UTF16PtrFromString(localize(host.preferences.General.Language, textSettingsMenu))
+	exitText, _ := syscall.UTF16PtrFromString(localize(host.preferences.General.Language, textExit))
 	procTrayAppendMenu.Call(menu, mfString, trayCommandCapture, uintptr(unsafe.Pointer(captureText)))
+	procTrayAppendMenu.Call(menu, mfString, trayCommandSettings, uintptr(unsafe.Pointer(settingsText)))
 	procTrayAppendMenu.Call(menu, mfSeparator, 0, 0)
 	procTrayAppendMenu.Call(menu, mfString, trayCommandExit, uintptr(unsafe.Pointer(exitText)))
 	var cursor trayPoint
@@ -284,6 +337,8 @@ func (host *windowsTrayHost) handleCommand(command uintptr) {
 	switch command {
 	case trayCommandCapture:
 		host.controller.Trigger()
+	case trayCommandSettings:
+		host.openSettings()
 	case trayCommandExit:
 		host.beginShutdown()
 	}
@@ -326,7 +381,7 @@ func trayWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		host.handleCommand(wParam & 0xffff)
 		return 0
 	case wmHotkey:
-		if wParam == trayCaptureHotkeyID {
+		if wParam == host.activeHotkeyID && host.activeHotkeyID != 0 {
 			host.controller.Trigger()
 		}
 		return 0
@@ -341,6 +396,71 @@ func trayWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	}
 	result, _, _ := procTrayDefWindowProc.Call(hwnd, uintptr(message), wParam, lParam)
 	return result
+}
+
+func (host *windowsTrayHost) captureConfig() application.Config {
+	host.configMu.RLock()
+	defer host.configMu.RUnlock()
+	return host.config
+}
+
+func (host *windowsTrayHost) registerInitialHotkey(hotkey configuredHotkey) error {
+	const initialID = 1
+	ok, _, callErr := procTrayRegisterHotKey.Call(host.hwnd, initialID, uintptr(hotkey.Modifiers|modNoRepeat), uintptr(hotkey.Key))
+	if ok == 0 {
+		return trayWin32Error("注册全局快捷键 "+formatConfiguredHotkey(hotkey), callErr)
+	}
+	host.activeHotkey = hotkey
+	host.activeHotkeyID = initialID
+	return nil
+}
+
+func (host *windowsTrayHost) unregisterActiveHotkey() {
+	if host.activeHotkeyID != 0 && host.hwnd != 0 {
+		procTrayUnregisterHotKey.Call(host.hwnd, host.activeHotkeyID)
+	}
+	host.activeHotkeyID = 0
+}
+
+func (host *windowsTrayHost) applyPreferences(value preferences) error {
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	hotkey, _ := parseConfiguredHotkey(value.General.Hotkey)
+	changeHotkey := host.activeHotkeyID == 0 || hotkey != host.activeHotkey
+	candidateID := uintptr(1)
+	if host.activeHotkeyID == 1 {
+		candidateID = 2
+	}
+	if changeHotkey {
+		ok, _, callErr := procTrayRegisterHotKey.Call(host.hwnd, candidateID, uintptr(hotkey.Modifiers|modNoRepeat), uintptr(hotkey.Key))
+		if ok == 0 {
+			return trayWin32Error("注册全局快捷键 "+formatConfiguredHotkey(hotkey), callErr)
+		}
+	}
+	if err := savePreferences(host.settingsPath, value); err != nil {
+		if changeHotkey {
+			procTrayUnregisterHotKey.Call(host.hwnd, candidateID)
+		}
+		return err
+	}
+	if changeHotkey {
+		oldID := host.activeHotkeyID
+		host.activeHotkeyID = candidateID
+		host.activeHotkey = hotkey
+		if oldID != 0 {
+			procTrayUnregisterHotKey.Call(host.hwnd, oldID)
+		}
+	}
+	value.General.Hotkey = formatConfiguredHotkey(hotkey)
+	host.preferences = value
+	setUILanguage(value.General.Language)
+	host.configMu.Lock()
+	updated := value.apply(host.config, host.programDirectory)
+	host.config = host.overrides.apply(updated, host.commandLineConfig)
+	host.configMu.Unlock()
+	host.refreshIconTip()
+	return nil
 }
 
 func showInformationMessage(text string) {

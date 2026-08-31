@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -108,6 +109,40 @@ func TestParseArgumentsAcceptsReliabilityFlags(t *testing.T) {
 	}
 	if config.DiagnosticDir != "diagnostics" || config.DiagnosticMax != 12 {
 		t.Fatalf("diagnostic flags were not applied: %+v", config)
+	}
+}
+
+func TestSavedPreferencesProvideDefaultsAndCommandLineWins(t *testing.T) {
+	saved := defaultPreferences()
+	saved.LongCapture.IntervalMS = 300
+	saved.LongCapture.MaxScrollRatio = 0.65
+	saved.Diagnostics.Enabled = true
+	saved.Diagnostics.Directory = "saved-diagnostics"
+	saved.Diagnostics.Limit = 20
+	options, err := parseLaunchArgumentsWithPreferences([]string{
+		"--interval", "250ms",
+		"--diagnostic-limit", "12",
+	}, saved, filepath.Join("program", "dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Config.Interval != 250*time.Millisecond || options.Config.MatchOptions.MaxOffsetRatio != 0.65 {
+		t.Fatalf("unexpected merged capture settings: %+v", options.Config)
+	}
+	if options.Config.DiagnosticDir != filepath.Join("program", "dir", "saved-diagnostics") || options.Config.DiagnosticMax != 12 {
+		t.Fatalf("unexpected merged diagnostics: %+v", options.Config)
+	}
+	if !options.Overrides.Interval || !options.Overrides.DiagnosticLimit || options.Overrides.MaxScrollRatio {
+		t.Fatalf("unexpected override tracking: %+v", options.Overrides)
+	}
+
+	changed := saved
+	changed.LongCapture.IntervalMS = 500
+	changed.Diagnostics.Limit = 99
+	recomputed := changed.apply(options.Config, options.ProgramDirectory)
+	recomputed = options.Overrides.apply(recomputed, options.CommandLineConfig)
+	if recomputed.Interval != 250*time.Millisecond || recomputed.DiagnosticMax != 12 || recomputed.MatchOptions.MaxOffsetRatio != 0.65 {
+		t.Fatalf("command-line overrides were not retained: %+v", recomputed)
 	}
 }
 

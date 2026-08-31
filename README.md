@@ -11,6 +11,7 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 - Add rectangles, arrows, and text annotations
 - Adjust annotation colors and line widths
 - Run from the Windows notification area
+- Configure the global capture shortcut and scrolling matcher from a native Windows settings dialog
 - Capture multi-monitor desktops using physical pixel coordinates
 - Collect diagnostic data for rejected scrolling frames
 
@@ -80,7 +81,32 @@ It should be reported as a 64-bit PE executable for Microsoft Windows. The Windo
 
 ## Usage
 
-Double-click `screenshot-win.exe` to start screenshot-win in the Windows notification area. Press `Alt+Shift+A` from any application to begin a capture. You can also left-click the tray icon, or right-click it to start a capture or exit the application.
+Double-click `screenshot-win.exe` to start screenshot-win in the Windows notification area. Press `Alt+Shift+A` from any application to begin a capture. You can also left-click the tray icon, or right-click it to start a capture, open settings, or exit the application.
+
+### Settings
+
+Settings are stored beside the executable in `screenshot-win.toml`. Relative diagnostic paths are resolved from that directory. If the executable directory is not writable, saving reports an error and keeps the unsaved values in the dialog. A missing file uses built-in defaults; an invalid file produces a warning and the application continues with defaults.
+
+The generated file has this shape:
+
+```toml
+[general]
+hotkey = 'Alt+Shift+A'
+
+[long_capture]
+interval_ms = 100
+max_scroll_ratio = 0.5
+max_mean_difference = 8.0
+minimum_confidence = 0.25
+stationary_threshold = 0.5
+
+[diagnostics]
+enabled = false
+directory = 'diagnostics'
+limit = 50
+```
+
+Explicit command-line flags override the corresponding saved values for the current process. Changes made in the settings dialog are still persisted and take effect the next time the application starts without those flags.
 
 To start one interactive capture without keeping the tray application running:
 
