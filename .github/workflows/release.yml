@@ -1,0 +1,120 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example: v1.0.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as a prerelease"
+        required: true
+        default: false
+        type: boolean
+      draft:
+        description: "Create as a draft release"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Test, package, and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must be a SemVer-style tag such as v1.2.3 or v1.2.3-rc.1." >&2
+            exit 1
+          fi
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists." >&2
+            exit 1
+          fi
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists without a release; refusing to reuse it." >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Windows amd64 executable
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H=windowsgui" \
+            -o dist/screenshot-win.exe ./cmd/screenshot-win
+
+      - name: Package and checksum
+        run: |
+          zip -j -9 dist/screenshot-win-windows-amd64.zip dist/screenshot-win.exe
+          cd dist
+          sha256sum screenshot-win-windows-amd64.zip > screenshot-win-windows-amd64.zip.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshot-win-${{ inputs.version }}-windows-amd64
+          path: |
+            dist/screenshot-win-windows-amd64.zip
+            dist/screenshot-win-windows-amd64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          IS_DRAFT: ${{ inputs.draft }}
+        run: |
+          flags=(
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "screenshot-win $VERSION"
+            --generate-notes
+          )
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            flags+=(--draft)
+          fi
+
+          gh release create "$VERSION" \
+            dist/screenshot-win-windows-amd64.zip \
+            dist/screenshot-win-windows-amd64.zip.sha256 \
+            "${flags[@]}"
