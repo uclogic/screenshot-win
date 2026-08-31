@@ -18,8 +18,13 @@ const diagnosticQueueSize = 32
 type diagnosticEvent struct {
 	Sequence        int                           `json:"sequence"`
 	CapturedAt      time.Time                     `json:"captured_at"`
+	Implementation  string                        `json:"implementation"`
 	Matched         bool                          `json:"matched"`
 	Offset          int                           `json:"offset"`
+	Position        int                           `json:"position"`
+	AddedTop        int                           `json:"added_top"`
+	AddedBottom     int                           `json:"added_bottom"`
+	Relocalized     bool                          `json:"relocalized"`
 	BestScore       float64                       `json:"best_score"`
 	SecondBestScore float64                       `json:"second_best_score"`
 	Reason          screenshotwin.RejectionReason `json:"reason,omitempty"`
@@ -68,21 +73,26 @@ func newDiagnosticWriter(directory string, maxRejected int) (*diagnosticWriter, 
 	return writer, nil
 }
 
-func (writer *diagnosticWriter) submit(sequence int, capturedAt time.Time, result screenshotwin.MatchResult, previous, current image.Image) error {
+func (writer *diagnosticWriter) submit(sequence int, capturedAt time.Time, implementation LongCaptureImplementation, result longCaptureFrameResult, previous, current image.Image) error {
 	if err := writer.currentError(); err != nil {
 		return err
 	}
 	event := diagnosticEvent{
 		Sequence:        sequence,
 		CapturedAt:      capturedAt,
-		Matched:         result.Matched,
-		Offset:          result.Offset,
-		BestScore:       result.BestScore,
-		SecondBestScore: result.SecondBestScore,
-		Reason:          result.Reason,
+		Implementation:  implementation.String(),
+		Matched:         result.matched,
+		Offset:          result.offset,
+		Position:        result.position,
+		AddedTop:        result.addedTop,
+		AddedBottom:     result.addedBottom,
+		Relocalized:     result.relocalized,
+		BestScore:       result.bestScore,
+		SecondBestScore: result.secondBestScore,
+		Reason:          result.reason,
 	}
 	job := diagnosticJob{event: event}
-	saveImages := !result.Matched && result.Reason != screenshotwin.RejectionStationary && writer.savedRejected < writer.maxRejected
+	saveImages := !result.matched && result.reason != screenshotwin.RejectionStationary && writer.savedRejected < writer.maxRejected
 	if saveImages {
 		index := writer.savedRejected + 1
 		job.event.PreviousImage = fmt.Sprintf("rejected-%06d-previous.png", index)

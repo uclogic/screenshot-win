@@ -19,16 +19,17 @@ func TestDiagnosticWriterRecordsEventsAndLimitsImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame := image.NewRGBA(image.Rect(0, 0, 20, 20))
-	result := screenshotwin.MatchResult{
-		Offset:          7,
-		BestScore:       12,
-		SecondBestScore: 13,
-		Reason:          screenshotwin.RejectionScoreTooHigh,
+	result := longCaptureFrameResult{
+		offset:          -7,
+		position:        -20,
+		bestScore:       12,
+		secondBestScore: 13,
+		reason:          screenshotwin.RejectionScoreTooHigh,
 	}
-	if err := writer.submit(1, time.Unix(1, 0), result, frame, frame); err != nil {
+	if err := writer.submit(1, time.Unix(1, 0), LongCaptureBidirectional, result, frame, frame); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.submit(2, time.Unix(2, 0), result, frame, frame); err != nil {
+	if err := writer.submit(2, time.Unix(2, 0), LongCaptureBidirectional, result, frame, frame); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.close(); err != nil {
@@ -54,6 +55,9 @@ func TestDiagnosticWriterRecordsEventsAndLimitsImages(t *testing.T) {
 	}
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
+	}
+	if events[0].Implementation != "bidirectional" || events[0].Offset != -7 || events[0].Position != -20 {
+		t.Fatalf("unexpected bidirectional diagnostic fields: %+v", events[0])
 	}
 	if events[0].PreviousImage == "" || events[1].PreviousImage != "" {
 		t.Fatalf("unexpected diagnostic image references: %+v", events)
@@ -82,7 +86,7 @@ func TestDiagnosticWriterReportsAsynchronousFailure(t *testing.T) {
 	}
 	want := os.ErrPermission
 	writer.setError(want)
-	if err := writer.submit(1, time.Now(), screenshotwin.MatchResult{}, nil, nil); err != want {
+	if err := writer.submit(1, time.Now(), LongCaptureLegacy, longCaptureFrameResult{}, nil, nil); err != want {
 		t.Fatalf("submit() error = %v, want %v", err, want)
 	}
 	writer.close()

@@ -5,7 +5,7 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 ## Features
 
 - Select a region on the Windows desktop with the mouse
-- Capture and stitch scrolling content
+- Capture and stitch scrolling content in either vertical direction
 - Save screenshots as PNG or copy them to the clipboard
 - Pin a captured image above other windows
 - Add rectangles, arrows, and text annotations
@@ -90,7 +90,7 @@ To start one interactive capture without keeping the tray application running:
 
 Drag to select a region. Press `Esc` or right-click to cancel. After selecting a region, use the toolbar to save, copy, annotate, pin, or begin a scrolling capture.
 
-During a scrolling capture, scroll downward slowly. Use the capture toolbar to save, copy, edit, pin, or cancel the result. `Esc` and `Ctrl+C` also stop a coordinate-based capture.
+During a scrolling capture, scroll upward or downward slowly. Revisiting an already captured area does not duplicate it in the result. Use the capture toolbar to save, copy, edit, pin, or cancel the result. `Esc` and `Ctrl+C` also stop a coordinate-based capture.
 
 ### Capture a fixed region
 
@@ -135,6 +135,7 @@ selector/            Region selection, toolbars, previews, and pinned images
 third_party/         Vendored toolbar icon assets and licenses
 matcher.go           Frame matching logic
 stitch.go            Scrolling image builder
+bidirectional.go      Bidirectional matcher, page anchors, and image builder
 ```
 
 ## Releases

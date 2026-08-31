@@ -51,10 +51,21 @@ func TestConfigValidateRejectsUnsafeRuntimeValues(t *testing.T) {
 		func() Config { config := validConfig(); config.Interval = 0; return config }(),
 		func() Config { config := validConfig(); config.DiagnosticMax = -1; return config }(),
 		func() Config { config := validConfig(); config.Width = 0; return config }(),
+		func() Config { config := validConfig(); config.LongCaptureImplementation = 99; return config }(),
 	}
 	for _, config := range tests {
 		if err := config.Validate(); err == nil {
 			t.Errorf("Config.Validate() succeeded for %+v", config)
 		}
+	}
+}
+
+func TestLongCaptureImplementationDefaultsToBidirectional(t *testing.T) {
+	config := validConfig()
+	if config.LongCaptureImplementation != LongCaptureBidirectional {
+		t.Fatalf("default implementation = %v, want bidirectional", config.LongCaptureImplementation)
+	}
+	if LongCaptureLegacy.String() != "legacy" || LongCaptureBidirectional.String() != "bidirectional" {
+		t.Fatal("unexpected long capture implementation names")
 	}
 }

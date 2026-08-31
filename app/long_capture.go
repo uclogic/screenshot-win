@@ -18,6 +18,10 @@ type runStats struct {
 	analyzed       int
 	matched        int
 	appended       int
+	addedTop       int
+	addedBottom    int
+	revisited      int
+	relocalized    int
 	rejected       map[screenshotwin.RejectionReason]int
 	diagnosticDrop int
 }
@@ -72,19 +76,14 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 		closeDiagnostics(diagnostics)
 		return err
 	}
-	matcher, err := screenshotwin.NewMatcher(previous, config.MatchOptions)
-	if err != nil {
-		closeDiagnostics(diagnostics)
-		return err
-	}
-	builder, err := screenshotwin.NewBuilder(previous)
+	engine, err := newLongCaptureEngine(config.LongCaptureImplementation, previous, config.MatchOptions)
 	if err != nil {
 		closeDiagnostics(diagnostics)
 		return err
 	}
 	var preview longCapturePreview
 	if longCapturePreviewEnabled(config) {
-		preview, err = selector.ShowPreview(region, builder.Image())
+		preview, err = selector.ShowPreview(region, engine.Image())
 		if err != nil {
 			fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图已停用：%v\n", err)
 			preview = nil
@@ -105,7 +104,11 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 		}
 	}
 	stats := runStats{captured: 1, rejected: make(map[screenshotwin.RejectionReason]int)}
-	fmt.Fprintln(runner.runtime.Stdout, "开始截图。请缓慢向下滚动；按 Esc 或 Ctrl+C 结束。")
+	if config.LongCaptureImplementation == LongCaptureLegacy {
+		fmt.Fprintln(runner.runtime.Stdout, "开始截图。请缓慢向下滚动；按 Esc 或 Ctrl+C 结束。")
+	} else {
+		fmt.Fprintln(runner.runtime.Stdout, "开始截图。可缓慢向上或向下滚动；按 Esc 或 Ctrl+C 结束。")
+	}
 
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
@@ -159,7 +162,7 @@ captureLoop:
 					fmt.Fprintf(runner.runtime.Stderr, "警告：无法阻止截图区域的鼠标悬停事件：%v\n", shieldErr)
 					shield = nil
 				}
-				preview, err = selector.ShowPreview(region, builder.Image())
+				preview, err = selector.ShowPreview(region, engine.Image())
 				if err != nil {
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图无法恢复：%v\n", err)
 					preview = nil
@@ -189,7 +192,7 @@ captureLoop:
 				return captureErr
 			}
 			stats.captured++
-			result, analyzeErr := matcher.Analyze(current)
+			result, analyzeErr := engine.Add(current)
 			if analyzeErr != nil {
 				closeDiagnostics(diagnostics)
 				return analyzeErr
@@ -197,7 +200,7 @@ captureLoop:
 			stats.analyzed++
 
 			if diagnostics != nil {
-				if submitErr := diagnostics.submit(stats.analyzed, capturedAt, result, previous, current); submitErr != nil {
+				if submitErr := diagnostics.submit(stats.analyzed, capturedAt, config.LongCaptureImplementation, result, previous, current); submitErr != nil {
 					fmt.Fprintf(runner.runtime.Stderr, "警告：诊断已停用：%v\n", submitErr)
 					stats.diagnosticDrop += diagnostics.droppedCount()
 					diagnostics.close()
@@ -205,25 +208,36 @@ captureLoop:
 				}
 			}
 
-			if !result.Matched {
-				stats.rejected[result.Reason]++
+			if !result.matched {
+				stats.rejected[result.reason]++
 				continue
 			}
-			if appendErr := builder.Append(current, result.Offset); appendErr != nil {
-				closeDiagnostics(diagnostics)
-				return appendErr
-			}
-			if preview != nil {
+			newRows := result.addedTop + result.addedBottom
+			if preview != nil && newRows > 0 {
 				var previewErr error
-				preview, previewErr = refreshLongCapturePreview(preview, builder.Image())
+				preview, previewErr = refreshLongCapturePreview(preview, engine.Image())
 				if previewErr != nil {
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图已停用：%v\n", previewErr)
 				}
 			}
 			previous = current
 			stats.matched++
-			stats.appended += result.Offset
-			fmt.Fprintf(runner.runtime.Stdout, "已追加 %d px，总高度 %d px（评分 %.3f）\n", result.Offset, builder.Height(), result.BestScore)
+			stats.appended += newRows
+			stats.addedTop += result.addedTop
+			stats.addedBottom += result.addedBottom
+			if newRows == 0 {
+				stats.revisited++
+			}
+			if result.relocalized {
+				stats.relocalized++
+			}
+			if config.LongCaptureImplementation == LongCaptureLegacy {
+				fmt.Fprintf(runner.runtime.Stdout, "已追加 %d px，总高度 %d px（评分 %.3f）\n",
+					result.offset, engine.Image().Bounds().Dy(), result.bestScore)
+			} else {
+				fmt.Fprintf(runner.runtime.Stdout, "已定位至 %d px，新增上方 %d px、下方 %d px，总高度 %d px（评分 %.3f）\n",
+					result.position, result.addedTop, result.addedBottom, engine.Image().Bounds().Dy(), result.bestScore)
+			}
 		}
 	}
 	if captureToolbar != nil {
@@ -249,7 +263,7 @@ captureLoop:
 		fmt.Fprintln(runner.runtime.Stdout, "已取消长截图，不会创建输出文件。")
 		return nil
 	}
-	output := builder.Finish()
+	output := engine.Finish()
 	switch finishAction {
 	case selector.ActionEdit:
 		if session == nil {
@@ -360,6 +374,10 @@ func (runner *Runner) printSummary(stats runStats, output image.Image, outputPat
 
 func (runner *Runner) printRunStats(stats runStats) {
 	fmt.Fprintf(runner.runtime.Stdout, "摘要：捕获 %d 帧，分析 %d 次，成功 %d 次，追加 %d px\n", stats.captured, stats.analyzed, stats.matched, stats.appended)
+	if stats.addedTop > 0 || stats.revisited > 0 || stats.relocalized > 0 {
+		fmt.Fprintf(runner.runtime.Stdout, "双向：上方新增 %d px，下方新增 %d px，回访 %d 帧，历史重定位 %d 次\n",
+			stats.addedTop, stats.addedBottom, stats.revisited, stats.relocalized)
+	}
 	fmt.Fprintf(runner.runtime.Stdout, "拒绝：静止 %d，评分过高 %d，结果歧义 %d，其他 %d\n",
 		stats.rejected[screenshotwin.RejectionStationary],
 		stats.rejected[screenshotwin.RejectionScoreTooHigh],
