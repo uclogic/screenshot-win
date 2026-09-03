@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	coarseScale   = 4
-	minimumOffset = 3
+	coarseScale               = 4
+	minimumOffset             = 3
+	stationaryScoreHysteresis = 0.01
 )
 
 // RejectionReason explains why two frames were not matched.
@@ -160,7 +161,11 @@ func analyzeGrayscale(prev []uint8, width, height int, curr []uint8, currentWidt
 	}
 
 	stationaryScore := overlapScore(prev, curr, width, height, 0, coarseScale)
-	if stationaryScore <= options.StationaryDifference {
+	// Exact duplicate captures are common while the user is between wheel
+	// events. Reject them immediately, but do not classify every low average
+	// difference as stationary yet: on sparse pages a real scroll can change
+	// only a tiny fraction of the frame.
+	if stationaryScore == 0 {
 		return rejected(RejectionStationary, stationaryScore, 256)
 	}
 
@@ -195,6 +200,14 @@ func analyzeGrayscale(prev []uint8, width, height int, curr []uint8, currentWidt
 		} else if score < secondScore {
 			secondScore = score
 		}
+	}
+
+	// A low whole-frame difference means "stationary" only when zero offset
+	// fits at least as well as the best translated overlap. This preserves the
+	// noise tolerance of StationaryDifference without letting large blank areas
+	// hide a small but exact content translation.
+	if stationaryScore <= options.StationaryDifference && stationaryScore <= bestScore+stationaryScoreHysteresis {
+		return rejected(RejectionStationary, stationaryScore, bestScore)
 	}
 
 	if bestScore > options.MaxMeanDifference {

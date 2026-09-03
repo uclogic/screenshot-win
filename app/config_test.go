@@ -60,10 +60,10 @@ func TestConfigValidateRejectsUnsafeRuntimeValues(t *testing.T) {
 	}
 }
 
-func TestLongCaptureImplementationDefaultsToBidirectional(t *testing.T) {
+func TestLongCaptureImplementationDefaultsToLegacy(t *testing.T) {
 	config := validConfig()
-	if config.LongCaptureImplementation != LongCaptureBidirectional {
-		t.Fatalf("default implementation = %v, want bidirectional", config.LongCaptureImplementation)
+	if config.LongCaptureImplementation != LongCaptureLegacy {
+		t.Fatalf("default implementation = %v, want legacy", config.LongCaptureImplementation)
 	}
 	if LongCaptureLegacy.String() != "legacy" || LongCaptureBidirectional.String() != "bidirectional" {
 		t.Fatal("unexpected long capture implementation names")

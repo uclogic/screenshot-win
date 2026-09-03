@@ -14,7 +14,7 @@ func TestDefaultPreferencesAreValid(t *testing.T) {
 	if err := value.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if value.General.Hotkey != "Alt+Shift+A" || value.General.Language != languageEnglish || value.LongCapture.IntervalMS != 100 || value.Diagnostics.Limit != 50 {
+	if value.General.Hotkey != "Alt+Shift+A" || value.General.Language != languageEnglish || value.LongCapture.Mode != longCaptureModeLegacy || value.LongCapture.IntervalMS != 100 || value.Diagnostics.Limit != 50 {
 		t.Fatalf("unexpected defaults: %+v", value)
 	}
 }
@@ -25,6 +25,7 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	want.General.Hotkey = "Ctrl+Alt+F8"
 	want.General.Language = languageChinese
 	want.LongCapture.IntervalMS = 225
+	want.LongCapture.Mode = longCaptureModeBidirectional
 	want.LongCapture.MaxScrollRatio = 0.7
 	want.Diagnostics.Enabled = true
 	want.Diagnostics.Directory = "debug-data"
@@ -65,7 +66,7 @@ func TestLoadPreferencesMergesMissingFieldsWithDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := defaultPreferences()
-	if got.LongCapture.IntervalMS != 250 || got.General != want.General || got.LongCapture.MaxScrollRatio != want.LongCapture.MaxScrollRatio || got.Diagnostics != want.Diagnostics {
+	if got.LongCapture.IntervalMS != 250 || got.LongCapture.Mode != longCaptureModeLegacy || got.General != want.General || got.LongCapture.MaxScrollRatio != want.LongCapture.MaxScrollRatio || got.Diagnostics != want.Diagnostics {
 		t.Fatalf("partial settings did not retain defaults: %+v", got)
 	}
 }
@@ -89,6 +90,7 @@ func TestPreferencesValidateRejectsInvalidValues(t *testing.T) {
 		func() preferences { value := defaultPreferences(); value.General.Language = "fr"; return value }(),
 		func() preferences { value := defaultPreferences(); value.General.Hotkey = "A"; return value }(),
 		func() preferences { value := defaultPreferences(); value.LongCapture.IntervalMS = 0; return value }(),
+		func() preferences { value := defaultPreferences(); value.LongCapture.Mode = "unknown"; return value }(),
 		func() preferences { value := defaultPreferences(); value.LongCapture.MaxScrollRatio = 1; return value }(),
 		func() preferences {
 			value := defaultPreferences()
@@ -123,11 +125,15 @@ func TestConfiguredHotkeyParsingAndFormatting(t *testing.T) {
 func TestPreferencesApplyResolvesDiagnosticDirectory(t *testing.T) {
 	value := defaultPreferences()
 	value.LongCapture.IntervalMS = 275
+	value.LongCapture.Mode = longCaptureModeLegacy
 	value.Diagnostics.Enabled = true
 	value.Diagnostics.Directory = "diagnostics"
 	config := value.apply(application.Config{}, filepath.Join("root", "app"))
 	if config.Interval != 275*time.Millisecond || config.DiagnosticDir != filepath.Join("root", "app", "diagnostics") {
 		t.Fatalf("applied config = %+v", config)
+	}
+	if config.LongCaptureImplementation != application.LongCaptureLegacy {
+		t.Fatalf("long capture implementation = %v, want legacy", config.LongCaptureImplementation)
 	}
 	value.Diagnostics.Enabled = false
 	if got := value.apply(config, "ignored").DiagnosticDir; got != "" {

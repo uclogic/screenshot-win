@@ -8,12 +8,12 @@ import (
 )
 
 // LongCaptureImplementation selects the scrolling-capture engine. The zero
-// value intentionally selects the bidirectional implementation.
+// value intentionally selects the more stable one-way implementation.
 type LongCaptureImplementation uint8
 
 const (
-	LongCaptureBidirectional LongCaptureImplementation = iota
-	LongCaptureLegacy
+	LongCaptureLegacy LongCaptureImplementation = iota
+	LongCaptureBidirectional
 )
 
 func (implementation LongCaptureImplementation) valid() bool {

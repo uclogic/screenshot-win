@@ -92,8 +92,10 @@ The generated file has this shape:
 ```toml
 [general]
 hotkey = 'Alt+Shift+A'
+language = 'en'
 
 [long_capture]
+mode = 'legacy'
 interval_ms = 100
 max_scroll_ratio = 0.5
 max_mean_difference = 8.0
@@ -116,7 +118,7 @@ To start one interactive capture without keeping the tray application running:
 
 Drag to select a region. Press `Esc` or right-click to cancel. After selecting a region, use the toolbar to save, copy, annotate, pin, or begin a scrolling capture.
 
-During a scrolling capture, scroll upward or downward slowly. Revisiting an already captured area does not duplicate it in the result. Use the capture toolbar to save, copy, edit, pin, or cancel the result. `Esc` and `Ctrl+C` also stop a coordinate-based capture.
+During a scrolling capture, scroll slowly. The default one-way `legacy` mode captures downward scrolling with the original, more stable stitching implementation. Choose `bidirectional` in Settings when you need to scroll both upward and downward; revisiting an already captured area does not duplicate it in the result. The new setting applies to the next capture immediately after Apply. Use the capture toolbar to save, copy, edit, pin, or cancel the result. `Esc` and `Ctrl+C` also stop a coordinate-based capture.
 
 ### Capture a fixed region
 

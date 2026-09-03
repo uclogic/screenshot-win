@@ -25,6 +25,9 @@ const (
 	textHotkeyHelp                 = "hotkey_help"
 	textLanguageLabel              = "language_label"
 	textScrollingMatching          = "scrolling_matching"
+	textLongCaptureMode            = "long_capture_mode"
+	textLongCaptureBidirectional   = "long_capture_bidirectional"
+	textLongCaptureLegacy          = "long_capture_legacy"
 	textCaptureInterval            = "capture_interval"
 	textMaxScrollRatio             = "max_scroll_ratio"
 	textMaxMeanDifference          = "max_mean_difference"
@@ -51,7 +54,8 @@ var catalogs = map[string]map[string]string{
 	languageEnglish: {
 		textSettings: "Settings", textGeneral: "General", textAdvanced: "Advanced", textKeyboardShortcut: "Keyboard shortcut",
 		textStartCapture: "Start capture", textStartCaptureLabel: "Start capture:", textHotkeyHelp: "Combine Ctrl, Alt, or Shift with one regular key.", textLanguageLabel: "Language:",
-		textScrollingMatching: "Scrolling capture matching", textCaptureInterval: "Capture interval (ms):", textMaxScrollRatio: "Maximum scroll ratio:",
+		textScrollingMatching: "Scrolling capture matching", textLongCaptureMode: "Capture direction:", textLongCaptureBidirectional: "Bidirectional (up and down)", textLongCaptureLegacy: "One-way (down only, legacy)",
+		textCaptureInterval: "Capture interval (ms):", textMaxScrollRatio: "Maximum scroll ratio:",
 		textMaxMeanDifference: "Maximum mean difference:", textMinConfidence: "Minimum confidence:", textStationaryThreshold: "Stationary threshold:",
 		textDiagnostics: "Diagnostics", textSaveDiagnostics: "Save diagnostic data", textDirectory: "Directory:", textBrowse: "Browse…",
 		textRejectedFrameLimit: "Rejected frame pair limit:", textOK: "OK", textCancel: "Cancel", textApply: "Apply",
@@ -62,7 +66,8 @@ var catalogs = map[string]map[string]string{
 	languageChinese: {
 		textSettings: "设置", textGeneral: "常规", textAdvanced: "高级", textKeyboardShortcut: "快捷键", textStartCapture: "开始截图",
 		textStartCaptureLabel: "开始截图：", textHotkeyHelp: "请使用 Ctrl、Alt 或 Shift 与一个普通按键组合。", textLanguageLabel: "语言：",
-		textScrollingMatching: "长截图匹配", textCaptureInterval: "截图间隔（毫秒）：", textMaxScrollRatio: "最大滚动比例：",
+		textScrollingMatching: "长截图匹配", textLongCaptureMode: "截图方向：", textLongCaptureBidirectional: "双向（向上和向下）", textLongCaptureLegacy: "单向（仅向下，旧版）",
+		textCaptureInterval: "截图间隔（毫秒）：", textMaxScrollRatio: "最大滚动比例：",
 		textMaxMeanDifference: "最大平均差异：", textMinConfidence: "最小置信度：", textStationaryThreshold: "静止判定阈值：",
 		textDiagnostics: "诊断", textSaveDiagnostics: "保存诊断数据", textDirectory: "目录：", textBrowse: "浏览…",
 		textRejectedFrameLimit: "拒绝帧对保存上限：", textOK: "确定", textCancel: "取消", textApply: "应用",

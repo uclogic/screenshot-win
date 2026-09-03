@@ -107,6 +107,17 @@ func (stitcher *BidirectionalStitcher) Add(current image.Image) (BidirectionalRe
 	match := analyzeSignedGrayscale(stitcher.last, curr, width, height, stitcher.options)
 	position := stitcher.lastPosition + match.Delta
 	relocalized := false
+	if match.Matched && stitcher.extensionRows(position) > 0 {
+		// Before growing either edge, check whether this frame is actually a
+		// revisit of rows already on the canvas. Low-texture or repeating pages
+		// can produce an equally good signed offset in the wrong direction.
+		// Prefer a fully captured location when its score is no worse.
+		if existing := stitcher.relocate(curr); existing.Matched && stitcher.extensionRows(existing.Position) == 0 && existing.BestScore <= match.BestScore+stationaryScoreHysteresis {
+			match = existing
+			position = existing.Position
+			relocalized = true
+		}
+	}
 	if !match.Matched && match.Reason != RejectionStationary {
 		match = stitcher.relocate(curr)
 		position = match.Position
@@ -166,7 +177,7 @@ func analyzeSignedGrayscale(previous, current []uint8, width, height int, option
 		return bidirectionalRejected(RejectionFrameTooShort, 256, 256)
 	}
 	stationaryScore := signedOverlapScore(previous, current, width, height, 0, coarseScale)
-	if stationaryScore <= options.StationaryDifference {
+	if stationaryScore == 0 {
 		return bidirectionalRejected(RejectionStationary, stationaryScore, 256)
 	}
 
@@ -198,6 +209,9 @@ func analyzeSignedGrayscale(previous, current []uint8, width, height int, option
 		} else if score < secondScore {
 			secondScore = score
 		}
+	}
+	if stationaryScore <= options.StationaryDifference && stationaryScore <= bestScore+stationaryScoreHysteresis {
+		return bidirectionalRejected(RejectionStationary, stationaryScore, bestScore)
 	}
 	if bestScore > options.MaxMeanDifference {
 		return bidirectionalRejectedWithDelta(RejectionScoreTooHigh, bestDelta, bestScore, secondScore)
@@ -300,6 +314,10 @@ func (stitcher *BidirectionalStitcher) validCandidate(position int) bool {
 	overlapEnd := minInt(position+stitcher.frameHeight, stitcher.maxY)
 	minimumOverlap := stitcher.frameHeight - int(float64(stitcher.frameHeight)*stitcher.options.MaxOffsetRatio)
 	return overlapEnd-overlapStart >= minimumOverlap
+}
+
+func (stitcher *BidirectionalStitcher) extensionRows(position int) int {
+	return maxInt(0, stitcher.minY-position) + maxInt(0, position+stitcher.frameHeight-stitcher.maxY)
 }
 
 func (stitcher *BidirectionalStitcher) canvasScore(current []uint8, position, step int) float64 {

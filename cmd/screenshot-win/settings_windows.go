@@ -22,6 +22,7 @@ const (
 	settingsIDTree            = 2001
 	settingsIDHotkey          = 2002
 	settingsIDLanguage        = 2003
+	settingsIDLongCaptureMode = 2100
 	settingsIDInterval        = 2101
 	settingsIDMaxScroll       = 2102
 	settingsIDMaxDifference   = 2103
@@ -211,7 +212,7 @@ func (host *windowsTrayHost) openSettings() {
 	hwnd, _, callErr := procSettingsCreateWindowEx.Call(
 		settingsWSExControlParent, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
 		settingsWSCaption|settingsWSSysMenu|settingsWSMinimizeBox,
-		0x80000000, 0x80000000, 680, 455, host.hwnd, 0, host.instance, 0,
+		0x80000000, 0x80000000, 680, 487, host.hwnd, 0, host.instance, 0,
 	)
 	runtime.KeepAlive(state)
 	if hwnd == 0 {
@@ -306,7 +307,7 @@ func (state *settingsWindow) createControls() error {
 	}
 	if state.dpi != 96 {
 		width := uintptr((680*state.dpi + 48) / 96)
-		height := uintptr((455*state.dpi + 48) / 96)
+		height := uintptr((487*state.dpi + 48) / 96)
 		procSettingsSetWindowPos.Call(state.hwnd, 0, 0, 0, width, height, 0x0016)
 	}
 	font, _, _ := procSettingsGetStockObject.Call(settingsDefaultGUIFont)
@@ -355,6 +356,10 @@ func (state *settingsWindow) createControls() error {
 		state.general = []uintptr{generalGroup, generalLabel, hotkey, generalHelp, languageLabel, languageCombo}
 
 		captureGroup := must(2401, "BUTTON", localize(language, textScrollingMatching), settingsBSGroupBox)
+		modeLabel := must(2407, "STATIC", localize(language, textLongCaptureMode), 0)
+		mode := must(settingsIDLongCaptureMode, "COMBOBOX", "", settingsWSTabStop|settingsCBSDropDownList)
+		state.addComboString(mode, localize(language, textLongCaptureBidirectional))
+		state.addComboString(mode, localize(language, textLongCaptureLegacy))
 		intervalLabel := must(2402, "STATIC", localize(language, textCaptureInterval), 0)
 		interval := must(settingsIDInterval, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll|settingsESNumber)
 		maxScrollLabel := must(2403, "STATIC", localize(language, textMaxScrollRatio), 0)
@@ -373,7 +378,7 @@ func (state *settingsWindow) createControls() error {
 		limitLabel := must(2503, "STATIC", localize(language, textRejectedFrameLimit), 0)
 		limit := must(settingsIDDiagnosticLimit, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll|settingsESNumber)
 		overrideNote := must(2504, "STATIC", state.overrideMessage(), 0)
-		state.advanced = []uintptr{captureGroup, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary, diagnosticGroup, diagnostics, directoryLabel, directory, browse, limitLabel, limit, overrideNote}
+		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary, diagnosticGroup, diagnostics, directoryLabel, directory, browse, limitLabel, limit, overrideNote}
 
 		must(1, "BUTTON", localize(language, textOK), settingsWSTabStop|settingsBSDefaultPushButton)
 		must(2, "BUTTON", localize(language, textCancel), settingsWSTabStop)
@@ -407,7 +412,7 @@ func (state *settingsWindow) layout() {
 			procSettingsSetWindowPos.Call(hwnd, 0, scale(x), scale(y), scale(width), scale(height), 0x0014)
 		}
 	}
-	move(settingsIDTree, 12, 12, 145, 356)
+	move(settingsIDTree, 12, 12, 145, 388)
 	move(2301, 174, 12, 476, 150)
 	move(2302, 194, 48, 92, 22)
 	move(settingsIDHotkey, 292, 44, 190, 26)
@@ -415,26 +420,28 @@ func (state *settingsWindow) layout() {
 	move(2304, 194, 108, 92, 22)
 	move(settingsIDLanguage, 292, 104, 190, 120)
 
-	move(2401, 174, 12, 476, 205)
+	move(2401, 174, 12, 476, 237)
+	move(2407, 194, 45, 160, 22)
+	move(settingsIDLongCaptureMode, 365, 41, 220, 160)
 	labels := []int{2402, 2403, 2404, 2405, 2406}
 	edits := []int{settingsIDInterval, settingsIDMaxScroll, settingsIDMaxDifference, settingsIDMinConfidence, settingsIDStationary}
 	for index := range labels {
-		y := 42 + index*32
+		y := 74 + index*32
 		move(labels[index], 194, y+3, 160, 22)
 		move(edits[index], 365, y, 140, 24)
 	}
-	move(2501, 174, 226, 476, 142)
-	move(settingsIDDiagnostics, 194, 249, 180, 22)
-	move(2502, 194, 281, 52, 22)
-	move(settingsIDDiagnosticDir, 246, 278, 290, 24)
-	move(settingsIDBrowse, 544, 277, 82, 26)
-	move(2503, 194, 315, 168, 22)
-	move(settingsIDDiagnosticLimit, 365, 312, 140, 24)
-	move(2504, 194, 340, 420, 20)
+	move(2501, 174, 258, 476, 142)
+	move(settingsIDDiagnostics, 194, 281, 180, 22)
+	move(2502, 194, 313, 52, 22)
+	move(settingsIDDiagnosticDir, 246, 310, 290, 24)
+	move(settingsIDBrowse, 544, 309, 82, 26)
+	move(2503, 194, 347, 168, 22)
+	move(settingsIDDiagnosticLimit, 365, 344, 140, 24)
+	move(2504, 194, 372, 420, 20)
 
-	move(1, 410, 384, 76, 28)
-	move(2, 492, 384, 76, 28)
-	move(settingsIDApply, 574, 384, 76, 28)
+	move(1, 410, 416, 76, 28)
+	move(2, 492, 416, 76, 28)
+	move(settingsIDApply, 574, 416, 76, 28)
 }
 
 func (state *settingsWindow) load(value preferences) {
@@ -444,6 +451,11 @@ func (state *settingsWindow) load(value preferences) {
 	procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetRules, 0x0001, settingsHotkeyFCtrl|settingsHotkeyFAlt)
 	procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetHotkey, uintptr(hotkeyToControl(hotkey)), 0)
 	procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBSetCurrent, uintptr(languageIndex(value.General.Language)), 0)
+	modeIndex := uintptr(0)
+	if value.LongCapture.Mode == longCaptureModeLegacy {
+		modeIndex = 1
+	}
+	procSettingsSendMessage.Call(state.controls[settingsIDLongCaptureMode], settingsCBSetCurrent, modeIndex, 0)
 	state.setText(settingsIDInterval, strconv.Itoa(value.LongCapture.IntervalMS))
 	state.setText(settingsIDMaxScroll, strconv.FormatFloat(value.LongCapture.MaxScrollRatio, 'g', -1, 64))
 	state.setText(settingsIDMaxDifference, strconv.FormatFloat(value.LongCapture.MaxMeanDifference, 'g', -1, 64))
@@ -481,7 +493,7 @@ func (state *settingsWindow) handleCommand(id int, notification uint32) {
 			state.updateDiagnosticControls()
 			state.setDirty(true)
 		}
-	case settingsIDLanguage:
+	case settingsIDLanguage, settingsIDLongCaptureMode:
 		if notification == settingsCBNSelectionChange && !state.loading {
 			state.setDirty(true)
 		}
@@ -531,6 +543,11 @@ func (state *settingsWindow) read() (preferences, uintptr, error) {
 		return value, state.controls[settingsIDHotkey], fmt.Errorf("截图快捷键必须包含 Ctrl、Alt 或 Shift 与一个普通按键")
 	}
 	value.General.Hotkey = formatConfiguredHotkey(hotkey)
+	modeIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLongCaptureMode], settingsCBGetCurrent, 0, 0)
+	value.LongCapture.Mode = longCaptureModeBidirectional
+	if modeIndex == 1 {
+		value.LongCapture.Mode = longCaptureModeLegacy
+	}
 	var err error
 	if value.LongCapture.IntervalMS, err = state.readInt(settingsIDInterval); err != nil {
 		return value, state.controls[settingsIDInterval], fmt.Errorf("截图间隔必须是整数")

@@ -17,6 +17,11 @@ import (
 
 const settingsFileName = "screenshot-win.toml"
 
+const (
+	longCaptureModeBidirectional = "bidirectional"
+	longCaptureModeLegacy        = "legacy"
+)
+
 type preferences struct {
 	General     generalPreferences     `toml:"general"`
 	LongCapture longCapturePreferences `toml:"long_capture"`
@@ -29,6 +34,7 @@ type generalPreferences struct {
 }
 
 type longCapturePreferences struct {
+	Mode                string  `toml:"mode"`
 	IntervalMS          int     `toml:"interval_ms"`
 	MaxScrollRatio      float64 `toml:"max_scroll_ratio"`
 	MaxMeanDifference   float64 `toml:"max_mean_difference"`
@@ -58,6 +64,7 @@ func defaultPreferences() preferences {
 	return preferences{
 		General: generalPreferences{Hotkey: "Alt+Shift+A", Language: languageEnglish},
 		LongCapture: longCapturePreferences{
+			Mode:                longCaptureModeLegacy,
 			IntervalMS:          int(defaultCaptureInterval / time.Millisecond),
 			MaxScrollRatio:      match.MaxOffsetRatio,
 			MaxMeanDifference:   match.MaxMeanDifference,
@@ -139,6 +146,9 @@ func (value preferences) Validate() error {
 	if _, err := parseConfiguredHotkey(value.General.Hotkey); err != nil {
 		return fmt.Errorf("截图快捷键：%w", err)
 	}
+	if value.LongCapture.Mode != longCaptureModeBidirectional && value.LongCapture.Mode != longCaptureModeLegacy {
+		return fmt.Errorf("长截图模式必须是 %q 或 %q", longCaptureModeBidirectional, longCaptureModeLegacy)
+	}
 	if value.LongCapture.IntervalMS <= 0 || int64(value.LongCapture.IntervalMS) > math.MaxInt64/int64(time.Millisecond) {
 		return fmt.Errorf("长截图间隔必须大于 0 毫秒")
 	}
@@ -161,6 +171,10 @@ func (value preferences) Validate() error {
 }
 
 func (value preferences) apply(config application.Config, programDirectory string) application.Config {
+	config.LongCaptureImplementation = application.LongCaptureBidirectional
+	if value.LongCapture.Mode == longCaptureModeLegacy {
+		config.LongCaptureImplementation = application.LongCaptureLegacy
+	}
 	config.Interval = time.Duration(value.LongCapture.IntervalMS) * time.Millisecond
 	config.MatchOptions = screenshotwin.MatchOptions{
 		MaxOffsetRatio:       value.LongCapture.MaxScrollRatio,

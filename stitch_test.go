@@ -47,6 +47,25 @@ func TestAnalyzeScrollReportsStationaryReason(t *testing.T) {
 	}
 }
 
+func TestAnalyzeScrollDetectsSparsePageMovementBelowStationaryThreshold(t *testing.T) {
+	source := createSparseTestImage(320, 900)
+	previous := crop(source, 0, 600)
+	current := crop(source, 40, 600)
+	options := DefaultMatchOptions()
+
+	stationaryScore := overlapScoreForTest(previous, current, 0)
+	if stationaryScore <= 0 || stationaryScore > options.StationaryDifference {
+		t.Fatalf("test setup stationary score = %.3f, want within (0, %.3f]", stationaryScore, options.StationaryDifference)
+	}
+	result, err := AnalyzeScroll(previous, current, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Matched || result.Offset != 40 {
+		t.Fatalf("AnalyzeScroll() = %+v, want sparse-page offset 40", result)
+	}
+}
+
 func TestAnalyzeScrollReportsSizeMismatch(t *testing.T) {
 	previous := createTestImage(320, 600)
 	current := createTestImage(321, 600)
@@ -352,6 +371,31 @@ func assertOffset(t *testing.T, previous, current image.Image, expected int) {
 	if !ok || offset != expected {
 		t.Fatalf("FindScrollOffset() = (%d, %t), want (%d, true)", offset, ok, expected)
 	}
+}
+
+func createSparseTestImage(width, height int) *image.RGBA {
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	for index := range result.Pix {
+		result.Pix[index] = 255
+	}
+	markers := []image.Point{
+		image.Pt(16, 80), image.Pt(92, 164), image.Pt(208, 292),
+		image.Pt(44, 436), image.Pt(260, 608), image.Pt(132, 772),
+	}
+	for _, marker := range markers {
+		for y := marker.Y; y < marker.Y+3 && y < height; y++ {
+			for x := marker.X; x < marker.X+3 && x < width; x++ {
+				result.SetRGBA(x, y, color.RGBA{A: 255})
+			}
+		}
+	}
+	return result
+}
+
+func overlapScoreForTest(previous, current image.Image, offset int) float64 {
+	prev, width, height := grayscale(previous)
+	curr, _, _ := grayscale(current)
+	return overlapScore(prev, curr, width, height, offset, coarseScale)
 }
 
 func createTestImage(width, height int) *image.RGBA {

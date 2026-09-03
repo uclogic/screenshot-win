@@ -82,6 +82,27 @@ func TestBidirectionalStitcherPreservesFirstPixelsOnRevisit(t *testing.T) {
 	assertImagesEqual(t, stitcher.Image(), crop(source, 0, 900))
 }
 
+func TestBidirectionalStitcherSparsePageRollbackDoesNotAppend(t *testing.T) {
+	source := createSparseTestImage(320, 1000)
+	stitcher, err := NewBidirectionalStitcher(crop(source, 0, 600), DefaultMatchOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, position := range []int{40, 80, 120, 80, 40, 0} {
+		before := stitcher.Image().Bounds().Dy()
+		result, addErr := stitcher.Add(crop(source, position, 600))
+		if addErr != nil || !result.Matched {
+			t.Fatalf("position %d: result=%+v err=%v", position, result, addErr)
+		}
+		if position < 120 && before == 720 && (result.AddedTop != 0 || result.AddedBottom != 0) {
+			t.Fatalf("rollback to %d appended duplicate rows: %+v", position, result)
+		}
+	}
+	if got := stitcher.Image().Bounds().Dy(); got != 720 {
+		t.Fatalf("rollback result height = %d, want 720", got)
+	}
+}
+
 func TestBidirectionalStitcherRejectsUnseenJumpWithoutOverlap(t *testing.T) {
 	source := createTestImage(320, 1800)
 	stitcher, err := NewBidirectionalStitcher(crop(source, 0, 600), DefaultMatchOptions())
