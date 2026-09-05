@@ -38,24 +38,6 @@ func (preview *fakeLongCapturePreview) Update(image.Image) error {
 
 func (preview *fakeLongCapturePreview) Close() { preview.closeCall++ }
 
-func TestLongCapturePreviewOnlyUsesInteractiveMode(t *testing.T) {
-	if !longCapturePreviewEnabled(Config{Interactive: true}) {
-		t.Fatal("interactive long capture should enable preview")
-	}
-	if longCapturePreviewEnabled(Config{Interactive: false}) {
-		t.Fatal("coordinate long capture should not enable preview")
-	}
-}
-
-func TestDefaultLongCaptureFinishAction(t *testing.T) {
-	if got := defaultLongCaptureFinishAction(Config{Interactive: true}); got != selector.ActionCancel {
-		t.Fatalf("interactive finish action = %v, want cancel", got)
-	}
-	if got := defaultLongCaptureFinishAction(Config{Interactive: false}); got != selector.ActionSave {
-		t.Fatalf("coordinate finish action = %v, want save", got)
-	}
-}
-
 func TestDecideLongCaptureActionResumesAfterSaveDialogCancel(t *testing.T) {
 	decision, err := decideLongCaptureAction(selector.ActionSaveAs, 123, time.Unix(10, 0), func(owner uintptr, now time.Time) (string, bool, error) {
 		if owner != 123 || !now.Equal(time.Unix(10, 0)) {

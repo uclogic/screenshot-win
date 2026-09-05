@@ -11,7 +11,7 @@ import (
 )
 
 // Runtime supplies the platform-owned operations used by capture workflows.
-// Keeping these at the boundary lets the CLI and tray host share Runner.
+// The tray host supplies dialogs, logging, and the clock at this boundary.
 type Runtime struct {
 	ChoosePNGPath        func(owner uintptr, now time.Time) (path string, selected bool, err error)
 	ChoosePNGPathContext func(context.Context, uintptr, time.Time) (path string, selected bool, err error)
@@ -44,15 +44,6 @@ func NewRunner(coordinator *App, runtime Runtime) *Runner {
 	return &Runner{coordinator: coordinator, runtime: runtime, pins: selector.NewPinManager()}
 }
 
-// Run performs one interactive or coordinate capture session.
-func (runner *Runner) Run(config Config) error {
-	err := runner.RunContext(context.Background(), config)
-	if err == nil && runner != nil && runner.pins != nil {
-		runner.pins.Wait()
-	}
-	return err
-}
-
 // RunContext performs one capture session and cancels it when ctx is done.
 func (runner *Runner) RunContext(ctx context.Context, config Config) error {
 	if runner == nil || runner.coordinator == nil {
@@ -67,15 +58,7 @@ func (runner *Runner) RunContext(ctx context.Context, config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if config.Interactive {
-		return runner.runInteractive(ctx, config)
-	}
-	session, err := runner.coordinator.Begin(StateScrolling)
-	if err != nil {
-		return err
-	}
-	defer session.Finish()
-	return runner.runLongCapture(ctx, config, true, session)
+	return runner.runInteractive(ctx, config)
 }
 
 func (runner *Runner) State() State {

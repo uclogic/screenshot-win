@@ -19,3 +19,7 @@ func SelectContext(context.Context) (image.Rectangle, bool, error) {
 }
 
 func DesktopBounds() image.Rectangle { return image.Rectangle{} }
+
+func SelectWithOptions(context.Context, SelectionOptions) (image.Rectangle, bool, error) {
+	return image.Rectangle{}, false, errUnsupported
+}

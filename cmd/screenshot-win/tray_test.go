@@ -122,3 +122,28 @@ func waitUntil(t *testing.T, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestTrayControllerSerializesCaptureAndPin(t *testing.T) {
+	release := make(chan struct{})
+	controller := newTrayController(func(context.Context) error { <-release; return nil }, nil, nil)
+	if !controller.Trigger() {
+		t.Fatal("capture did not start")
+	}
+	if controller.TriggerTask(func(context.Context) error { t.Error("pin ran during capture"); return nil }) {
+		t.Fatal("pin was accepted during capture")
+	}
+	close(release)
+	waitUntil(t, func() bool { controller.mu.Lock(); defer controller.mu.Unlock(); return !controller.running })
+	pinStarted := make(chan struct{})
+	if !controller.TriggerTask(func(ctx context.Context) error { close(pinStarted); <-ctx.Done(); return ctx.Err() }) {
+		t.Fatal("pin did not start")
+	}
+	<-pinStarted
+	if controller.Trigger() {
+		t.Fatal("capture was accepted during pin")
+	}
+	<-controller.Shutdown()
+	if controller.TriggerTask(func(context.Context) error { return nil }) {
+		t.Fatal("pin accepted after shutdown")
+	}
+}

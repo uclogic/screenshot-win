@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"image"
-	"os"
-	"os/signal"
 	"time"
 
 	"screenshot-win"
@@ -44,10 +42,10 @@ type longCaptureActionDecision struct {
 	path   string
 }
 
-func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBorder bool, session *Session) error {
+func (runner *Runner) runLongCapture(ctx context.Context, config Config, session *Session) error {
 	region := image.Rect(config.X, config.Y, config.X+config.Width, config.Y+config.Height)
 	var border *selector.Border
-	if showBorder {
+	{
 		var borderErr error
 		border, borderErr = selector.ShowBorder(region)
 		if borderErr != nil {
@@ -82,7 +80,7 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 		return err
 	}
 	var preview longCapturePreview
-	if longCapturePreviewEnabled(config) {
+	{
 		preview, err = selector.ShowPreview(region, engine.Image())
 		if err != nil {
 			fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图已停用：%v\n", err)
@@ -93,7 +91,7 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 	}
 	var captureToolbar *selector.CaptureToolbar
 	var captureActions <-chan selector.Action
-	if config.Interactive {
+	{
 		captureToolbar, err = selector.ShowCaptureToolbar(region)
 		if err != nil {
 			fmt.Fprintf(runner.runtime.Stderr, "警告：长截图控制栏无法显示：%v\n", err)
@@ -105,17 +103,14 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, showBor
 	}
 	stats := runStats{captured: 1, rejected: make(map[screenshotwin.RejectionReason]int)}
 	if config.LongCaptureImplementation == LongCaptureLegacy {
-		fmt.Fprintln(runner.runtime.Stdout, "开始截图。请缓慢向下滚动；按 Esc 或 Ctrl+C 结束。")
+		fmt.Fprintln(runner.runtime.Stdout, "开始截图。请缓慢向下滚动；按 Esc 取消，或使用工具栏完成。")
 	} else {
-		fmt.Fprintln(runner.runtime.Stdout, "开始截图。可缓慢向上或向下滚动；按 Esc 或 Ctrl+C 结束。")
+		fmt.Fprintln(runner.runtime.Stdout, "开始截图。可缓慢向上或向下滚动；按 Esc 取消，或使用工具栏完成。")
 	}
 
-	interrupts := make(chan os.Signal, 1)
-	signal.Notify(interrupts, os.Interrupt)
-	defer signal.Stop(interrupts)
 	ticker := time.NewTicker(config.Interval)
 	defer ticker.Stop()
-	finishAction := defaultLongCaptureFinishAction(config)
+	finishAction := selector.ActionCancel
 	finishPath := ""
 
 captureLoop:
@@ -123,8 +118,6 @@ captureLoop:
 		select {
 		case <-ctx.Done():
 			finishAction = selector.ActionCancel
-			break captureLoop
-		case <-interrupts:
 			break captureLoop
 		case action, ok := <-captureActions:
 			if !ok {
@@ -298,11 +291,7 @@ captureLoop:
 		runner.printRunStats(stats)
 		return nil
 	default:
-		if err := savePNG(config.OutputPath, output); err != nil {
-			return err
-		}
-		runner.printSummary(stats, output, config.OutputPath)
-		return nil
+		return fmt.Errorf("unexpected long capture action %v", finishAction)
 	}
 }
 
@@ -340,15 +329,6 @@ func decideLongCaptureAction(action selector.Action, owner uintptr, now time.Tim
 	decision.path = path
 	return decision, nil
 }
-
-func defaultLongCaptureFinishAction(config Config) selector.Action {
-	if config.Interactive {
-		return selector.ActionCancel
-	}
-	return selector.ActionSave
-}
-
-func longCapturePreviewEnabled(config Config) bool { return config.Interactive }
 
 func refreshLongCapturePreview(preview longCapturePreview, source image.Image) (longCapturePreview, error) {
 	if preview == nil {

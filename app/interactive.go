@@ -37,8 +37,34 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 	}
 	defer session.Finish()
 
-	fmt.Fprintln(runner.runtime.Stdout, "请拖动鼠标选择截图区域；按 Esc 或右键取消。")
-	region, selected, err := selector.SelectContext(ctx)
+	desktop := selector.DesktopBounds()
+	if desktop.Empty() {
+		return fmt.Errorf("virtual desktop has invalid bounds %v", desktop)
+	}
+	desktopSnapshot, err := capture.Region(desktop.Min.X, desktop.Min.Y, desktop.Dx(), desktop.Dy())
+	if err != nil {
+		return err
+	}
+	var frozen *selector.Frozen
+	defer func() {
+		if frozen != nil {
+			frozen.Close()
+		}
+	}()
+	options := selector.SelectionOptions{
+		Mode: config.CandidateMode, Desktop: desktop, Snapshot: desktopSnapshot,
+		BeforeClose: func(region image.Rectangle) error {
+			var err error
+			frozen, err = selector.ShowFrozenDesktop(desktopSnapshot, region)
+			return err
+		},
+	}
+	if config.CandidateMode == selector.CandidateMinimalRectangle {
+		fmt.Fprintln(runner.runtime.Stdout, "单击确认候选框，或拖动手动框选；按 Esc 或右键取消。")
+	} else {
+		fmt.Fprintln(runner.runtime.Stdout, "请拖动鼠标选择截图区域；按 Esc 或右键取消。")
+	}
+	region, selected, err := selector.SelectWithOptions(ctx, options)
 	if err != nil {
 		return err
 	}
@@ -52,22 +78,8 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 	config.X, config.Y = region.Min.X, region.Min.Y
 	config.Width, config.Height = region.Dx(), region.Dy()
 
-	// Capture the entire virtual desktop so the post-selection UI can block
-	// interaction while showing one consistent frozen frame.
-	desktop := selector.DesktopBounds()
-	if desktop.Empty() {
-		return fmt.Errorf("virtual desktop has invalid bounds %v", desktop)
-	}
-	desktopSnapshot, err := capture.Region(desktop.Min.X, desktop.Min.Y, desktop.Dx(), desktop.Dy())
-	if err != nil {
-		return err
-	}
 	localRegion := region.Sub(desktop.Min)
 	snapshot := desktopSnapshot.SubImage(localRegion)
-	frozen, err := selector.ShowFrozenDesktop(desktopSnapshot, region)
-	if err != nil {
-		return err
-	}
 	if err := session.Transition(StateSelecting, StateFrozen); err != nil {
 		frozen.Close()
 		return err
@@ -122,7 +134,7 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 		if err := session.Transition(StateFrozen, StateScrolling); err != nil {
 			return err
 		}
-		return runner.runLongCapture(ctx, config, true, session)
+		return runner.runLongCapture(ctx, config, session)
 	case selector.ActionPin:
 		fmt.Fprintf(runner.runtime.Stdout, "已将截图贴到桌面（%d × %d）\n", snapshot.Bounds().Dx(), snapshot.Bounds().Dy())
 		return nil

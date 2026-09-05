@@ -8,6 +8,7 @@ import (
 	"image"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -90,6 +91,14 @@ var (
 )
 
 type selectionState struct {
+	snapshot      image.Image
+	candidateMode bool
+	beforeClose   func(image.Rectangle) error
+	candidates    []image.Rectangle
+	candidate     image.Rectangle
+	gesture       candidateGesture
+	detected      <-chan []image.Rectangle
+
 	hwnd      uintptr
 	desktop   image.Rectangle
 	client    image.Rectangle
@@ -160,6 +169,10 @@ func Select() (result image.Rectangle, selected bool, err error) {
 
 // SelectContext behaves like Select and closes the overlay when ctx is done.
 func SelectContext(ctx context.Context) (result image.Rectangle, selected bool, err error) {
+	return SelectWithOptions(ctx, SelectionOptions{})
+}
+
+func SelectWithOptions(ctx context.Context, options SelectionOptions) (result image.Rectangle, selected bool, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -171,6 +184,17 @@ func SelectContext(ctx context.Context) (result image.Rectangle, selected bool, 
 		return image.Rectangle{}, false, fmt.Errorf("virtual desktop has invalid bounds %v", desktop)
 	}
 	state := newSelectionState(desktop)
+	if !options.Mode.Valid() {
+		return image.Rectangle{}, false, fmt.Errorf("invalid candidate mode")
+	}
+	state.candidateMode = options.Mode == CandidateMinimalRectangle
+	state.beforeClose = options.BeforeClose
+	if options.Snapshot != nil || state.candidateMode {
+		if options.Snapshot == nil || options.Desktop != desktop || options.Snapshot.Bounds().Size() != desktop.Size() {
+			return image.Rectangle{}, false, fmt.Errorf("candidate snapshot does not match desktop")
+		}
+		state.snapshot = options.Snapshot
+	}
 
 	instance, _, callErr := procGetModuleHandle.Call(0)
 	if instance == 0 {
@@ -207,6 +231,32 @@ func SelectContext(ctx context.Context) (result image.Rectangle, selected bool, 
 		return image.Rectangle{}, false, win32Error("CreateWindowExW", callErr)
 	}
 	state.hwnd = hwnd
+	if state.candidateMode {
+		dpi, _, _ := procGetDPIForWindow.Call(hwnd)
+		if dpi == 0 {
+			dpi = 96
+		}
+		state.gesture.threshold = max(3, scaleForDPI(4, int(dpi)))
+		detectCtx, cancel := context.WithCancel(ctx)
+		results := make(chan []image.Rectangle, 1)
+		done := make(chan struct{})
+		state.detected = results
+		go func() {
+			defer close(done)
+			rectangles, err := DetectRectangles(detectCtx, state.snapshot)
+			if err == nil {
+				results <- rectangles
+			}
+		}()
+		defer func() { cancel(); <-done }()
+		timer, _, timerErr := procFrozenSetTimer.Call(hwnd, 2, uintptr((30*time.Millisecond)/time.Millisecond), 0)
+		if timer == 0 {
+			procDestroyWindow.Call(hwnd)
+			return image.Rectangle{}, false, win32Error("SetTimer", timerErr)
+		}
+		defer procFrozenKillTimer.Call(hwnd, 2)
+		state.refreshCandidate()
+	}
 	stopCancellation := context.AfterFunc(ctx, func() {
 		procPostMessage.Call(hwnd, wmClose, 0, 0)
 	})
@@ -272,7 +322,28 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 		return result
 	}
 	switch message {
+	case wmTimer:
+		if state.snapshot != nil && wParam == 2 {
+			select {
+			case rectangles := <-state.detected:
+				state.candidates = rectangles
+				state.detected = nil
+				procFrozenKillTimer.Call(hwnd, 2)
+				if !state.gesture.pressed && state.refreshCandidate() {
+					state.renderOrClose()
+				}
+			default:
+			}
+			return 0
+		}
 	case wmLButtonDown:
+		if state.candidateMode {
+			state.refreshCandidate()
+			state.gesture.down(mousePoint(lParam), state.candidate)
+			procSetCapture.Call(hwnd)
+			return 0
+		}
+
 		state.anchor = mousePoint(lParam)
 		state.current = state.anchor
 		state.dragging = true
@@ -280,12 +351,34 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 		state.renderOrClose()
 		return 0
 	case wmMouseMove:
+		if state.candidateMode {
+			if state.gesture.pressed {
+				state.gesture.move(mousePoint(lParam))
+				state.renderOrClose()
+			} else if state.refreshCandidate() {
+				state.renderOrClose()
+			}
+			return 0
+		}
 		if state.dragging {
 			state.current = mousePoint(lParam)
 			state.renderOrClose()
 		}
 		return 0
 	case wmLButtonUp:
+		if state.candidateMode {
+			r, ok := state.gesture.up(mousePoint(lParam), state.client)
+			procReleaseCapture.Call()
+			if ok {
+				state.result = r.Add(state.desktop.Min)
+				state.selected = true
+				state.finishSelection()
+			} else {
+				state.refreshCandidate()
+				state.renderOrClose()
+			}
+			return 0
+		}
 		if state.dragging {
 			state.current = mousePoint(lParam)
 			state.dragging = false
@@ -294,7 +387,7 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 			if !selection.Empty() {
 				state.result = desktopRectangle(state.desktop, state.anchor, state.current)
 				state.selected = true
-				procDestroyWindow.Call(hwnd)
+				state.finishSelection()
 			} else {
 				state.renderOrClose()
 			}
@@ -314,6 +407,13 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 	}
 	result, _, _ := procDefWindowProc.Call(hwnd, uintptr(message), wParam, lParam)
 	return result
+}
+
+func (state *selectionState) finishSelection() {
+	if state.beforeClose != nil {
+		state.renderErr = state.beforeClose(state.result)
+	}
+	procDestroyWindow.Call(state.hwnd)
 }
 
 func mousePoint(lParam uintptr) image.Point {
@@ -377,6 +477,21 @@ func (state *selectionState) renderOrClose() {
 
 func (state *selectionState) render() error {
 	selection := dragRectangle(state.client, state.anchor, state.current)
+	if state.snapshot != nil && !state.candidateMode {
+		drawFrozenCandidate(state.pixels, state.snapshot, selection)
+		return state.present()
+	}
+	if state.candidateMode {
+		selection = state.candidate
+		if state.gesture.pressed {
+			selection = state.gesture.locked
+			if state.gesture.manual {
+				selection = dragRectangle(state.client, state.gesture.anchor, state.gesture.current)
+			}
+		}
+		drawFrozenCandidate(state.pixels, state.snapshot, selection)
+		return state.present()
+	}
 	drawSelectionOverlay(state.pixels, state.client.Dx(), selection, state.dragging)
 	return state.present()
 }

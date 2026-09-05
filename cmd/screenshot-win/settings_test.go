@@ -7,7 +7,41 @@ import (
 	"time"
 
 	application "screenshot-win/app"
+	"screenshot-win/selector"
 )
+
+func TestCandidatePreferences(t *testing.T) {
+	if defaultPreferences().General.CandidateMode != "none" {
+		t.Fatal("wrong default")
+	}
+	for i, mode := range candidateModeNames {
+		p := defaultPreferences()
+		p.General.CandidateMode = mode
+		path := filepath.Join(t.TempDir(), settingsFileName)
+		if err := savePreferences(path, p); err != nil {
+			t.Fatal(err)
+		}
+		got, err := loadPreferences(path)
+		if err != nil || got.General.CandidateMode != mode {
+			t.Fatalf("%+v %v", got, err)
+		}
+		if got.apply(application.Config{}, "").CandidateMode != selector.CandidateMode(i) {
+			t.Fatal("mode not applied")
+		}
+	}
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := os.WriteFile(path, []byte("[general]\nlanguage='en'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadPreferences(path)
+	if err != nil || got.General.CandidateMode != "none" {
+		t.Fatalf("old config: %+v %v", got, err)
+	}
+	got.General.CandidateMode = "bad"
+	if got.Validate() == nil {
+		t.Fatal("invalid mode accepted")
+	}
+}
 
 func TestDefaultPreferencesAreValid(t *testing.T) {
 	value := defaultPreferences()
@@ -108,11 +142,11 @@ func TestPreferencesValidateRejectsInvalidValues(t *testing.T) {
 }
 
 func TestConfiguredHotkeyParsingAndFormatting(t *testing.T) {
-	value, err := parseConfiguredHotkey("shift + ctrl + f12")
+	value, err := parseConfiguredHotkey("shift + ctrl + f11")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := formatConfiguredHotkey(value), "Ctrl+Shift+F12"; got != want {
+	if got, want := formatConfiguredHotkey(value), "Ctrl+Shift+F11"; got != want {
 		t.Fatalf("formatted hotkey = %q, want %q", got, want)
 	}
 	for _, invalid := range []string{"A", "Ctrl", "Ctrl+A+B", "Win+A", "Ctrl+NoSuchKey"} {
@@ -167,5 +201,98 @@ func TestEveryLanguageCatalogContainsEnglishKeys(t *testing.T) {
 func TestLocalizationFallsBackToEnglish(t *testing.T) {
 	if got, want := localize("unknown", textSettings), "Settings"; got != want {
 		t.Fatalf("fallback = %q, want %q", got, want)
+	}
+}
+
+func TestExpandedHotkeyCombinations(t *testing.T) {
+	for _, modifier := range []string{"Ctrl", "Alt", "Shift", "Ctrl+Alt", "Ctrl+Shift", "Alt+Shift", "Ctrl+Alt+Shift"} {
+		for _, key := range []string{"A", "7", "F1", "F11", "F24", "Space", "Left"} {
+			text := modifier + "+" + key
+			parsed, err := parseConfiguredHotkey(text)
+			if err != nil {
+				t.Errorf("%s: %v", text, err)
+				continue
+			}
+			if formatConfiguredHotkey(parsed) != text {
+				t.Errorf("round trip %s", text)
+			}
+		}
+	}
+	for key := uint32(0x70); key <= 0x7a; key++ {
+		text := hotkeyKeyName(key)
+		if _, err := parseConfiguredHotkey(text); err != nil {
+			t.Errorf("%s: %v", text, err)
+		}
+	}
+	for _, text := range []string{"", "A", "1", "F12", "Ctrl+F12", "Ctrl+Alt", "Shift", "Ctrl+VK_11", "Alt+VK_A0", "Ctrl+VK_5B"} {
+		if _, err := parseConfiguredHotkey(text); err == nil {
+			t.Errorf("accepted invalid %q", text)
+		}
+	}
+}
+
+func TestPinHotkeyPreferences(t *testing.T) {
+	value := defaultPreferences()
+	if value.General.PinHotkey != "" {
+		t.Fatal("pin shortcut must default to disabled")
+	}
+	value.General.PinHotkey = "shift + ctrl + b"
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.General.PinHotkey != "Ctrl+Shift+B" {
+		t.Fatalf("not normalized: %q", loaded.General.PinHotkey)
+	}
+	value.General.PinHotkey = " shift + alt + a "
+	if err := value.Validate(); err == nil {
+		t.Fatal("duplicate screenshot/pin shortcut accepted")
+	}
+	value.General.PinHotkey = "A"
+	if err := value.Validate(); err == nil {
+		t.Fatal("invalid pin shortcut accepted")
+	}
+	value.General.PinHotkey = " "
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.General.PinHotkey != "" {
+		t.Fatal("cleared shortcut was not preserved")
+	}
+}
+
+func TestCaptureHotkeyCanBeDisabled(t *testing.T) {
+	value := defaultPreferences()
+	value.General.Hotkey = " "
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.General.Hotkey != "" {
+		t.Fatalf("cleared capture shortcut was not preserved: %q", loaded.General.Hotkey)
+	}
+	if bindings := preferenceHotkeys(loaded); len(bindings) != 0 {
+		t.Fatalf("disabled shortcuts still registered: %v", bindings)
+	}
+	loaded.General.PinHotkey = "Alt+Shift+A"
+	if err := loaded.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	bindings := preferenceHotkeys(loaded)
+	key, _ := parseConfiguredHotkey(loaded.General.PinHotkey)
+	if action, ok := bindings[key]; len(bindings) != 1 || !ok || action != hotkeyPin {
+		t.Fatalf("pin shortcut unavailable with capture disabled: %v", bindings)
 	}
 }

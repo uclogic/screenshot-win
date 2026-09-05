@@ -23,8 +23,13 @@ func newTrayController(run func(context.Context) error, report func(error), clea
 
 // Trigger starts a capture if the host is idle. Repeated triggers are ignored.
 func (controller *trayController) Trigger() bool {
+	return controller.TriggerTask(controller.run)
+}
+
+// TriggerTask shares the same busy and shutdown boundary for all tray actions.
+func (controller *trayController) TriggerTask(run func(context.Context) error) bool {
 	controller.mu.Lock()
-	if controller.exiting || controller.running || controller.run == nil {
+	if controller.exiting || controller.running || run == nil {
 		controller.mu.Unlock()
 		return false
 	}
@@ -36,7 +41,7 @@ func (controller *trayController) Trigger() bool {
 	controller.mu.Unlock()
 
 	go func() {
-		err := controller.run(ctx)
+		err := run(ctx)
 		if controller.cleanup != nil {
 			controller.cleanup()
 		}

@@ -87,12 +87,20 @@ Double-click `screenshot-win.exe` to start screenshot-win in the Windows notific
 
 Settings are stored beside the executable in `screenshot-win.toml`. Relative diagnostic paths are resolved from that directory. If the executable directory is not writable, saving reports an error and keeps the unsaved values in the dialog. A missing file uses built-in defaults; an invalid file produces a warning and the application continues with defaults.
 
+Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, and `Shift` plus one key (for example `Ctrl+A`, `Alt+A`, `Shift+A`, or `Ctrl+Alt+Shift+A`), or a standalone `F1`–`F11`. F12 is reserved by Windows and is rejected. Bare letters/digits and modifier-only shortcuts are not accepted. The two actions must use different shortcuts; conflicts with other applications are reported when applying settings. Shortcuts are temporarily released while a shortcut field has focus so you can record an existing binding.
+
+**Pin clipboard** can be bound to a shortcut in Settings. Its optional shortcut defaults to disabled (`pin_hotkey = ''`); use **Clear** beside either shortcut in Settings to disable that binding. The tray context menu contains Settings and Exit; left-clicking the tray icon starts a capture. It pins a clipboard image, preferring PNG and then Windows DIB formats. If no supported image can be read, plain Unicode text is rendered as a white image with black text, preserving newlines and wrapping long lines. Text uses Microsoft YaHei UI at 18 pixels with 16-pixel margins and up to 640 pixels of content width. Rich text formatting is discarded. Empty content and oversized or malformed data produce an error without changing the clipboard.
+
+Pins appear near the mouse pointer and use the existing drag, zoom, and close controls. While a capture or clipboard-pin operation is running, additional triggers are ignored. Applying settings takes effect immediately; older settings files keep clipboard pinning disabled until configured.
+
 The generated file has this shape:
 
 ```toml
 [general]
 hotkey = 'Alt+Shift+A'
+pin_hotkey = ''
 language = 'en'
+candidate_mode = 'none'
 
 [long_capture]
 mode = 'legacy'
@@ -108,49 +116,31 @@ directory = 'diagnostics'
 limit = 50
 ```
 
-Explicit command-line flags override the corresponding saved values for the current process. Changes made in the settings dialog are still persisted and take effect the next time the application starts without those flags.
+### Automatic candidate rectangles
 
-To start one interactive capture without keeping the tray application running:
+In Settings → General, choose a candidate mode:
 
-```powershell
-.\screenshot-win.exe --once
-```
+- `none` (default): manual selection.
+- `windows ui interface`: reserved, not implemented; currently behaves like none.
+- `minimal Rectangle`: freeze the desktop on entry and detect rectangular regions using pure Go image processing.
 
-Drag to select a region. Press `Esc` or right-click to cancel. After selecting a region, use the toolbar to save, copy, annotate, pin, or begin a scrolling capture.
+Move the mouse to preview the smallest detected rectangle containing it. Candidates must be at least 100×80 physical pixels. While detection runs, or if no candidate contains the pointer, the preview uses the entire current monitor, including the taskbar. Click to confirm, or hold and drag to select manually; manual selections have no minimum size. Esc or right-click cancels. Detection and the final screenshot use the same frozen frame. After selection, use the toolbar to save, copy, annotate, pin, or start a scrolling capture.
 
-During a scrolling capture, scroll slowly. The default one-way `legacy` mode captures downward scrolling with the original, more stable stitching implementation. Choose `bidirectional` in Settings when you need to scroll both upward and downward; revisiting an already captured area does not duplicate it in the result. The new setting applies to the next capture immediately after Apply. Use the capture toolbar to save, copy, edit, pin, or cancel the result. `Esc` and `Ctrl+C` also stop a coordinate-based capture.
+During scrolling capture, scroll slowly. The default `legacy` mode captures downward scrolling; select `bidirectional` in Settings to capture in both directions. Use the capture toolbar to save, copy, edit, pin, or cancel. Settings changes apply to the next capture.
 
-### Capture a fixed region
+### Rectangle detector debugging
 
-screenshot-win also accepts a region in virtual-desktop coordinates:
-
-```powershell
-.\screenshot-win.exe <x> <y> <width> <height> [result.png]
-```
-
-For example:
+The only command-line mode is a one-shot detector diagnostic:
 
 ```powershell
-.\screenshot-win.exe 100 150 1200 700 page.png
+.\\screenshot-win.exe --debug.candidate_mode.minimalrectangle 100 150 1200 700 page.png
 ```
 
-This starts a scrolling capture for the specified region and saves the stitched image when the capture is stopped.
+The four numbers specify x, y, width, and height in physical virtual-desktop pixels. Negative coordinates are supported; the region must be inside the virtual desktop. The output path is required and is relative to the current working directory unless absolute.
 
-### Options
+This captures the specified area once and outlines every detected rectangle of at least 100×80 pixels in blue. It uses the same detector as interactive selection, without pointer filtering or monitor fallback. With no candidates, it saves the unmarked screenshot. The PNG retains the requested dimensions; an existing output file is overwritten. The command prints the rectangle count and output path, then exits. Capture, argument, and file errors produce a nonzero exit code.
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--tray` | Enabled when no coordinates are supplied | Run in the Windows notification area |
-| `--once` | Disabled | Run one interactive capture without the tray host |
-| `--interval <duration>` | `100ms` | Set the delay between captured frames |
-| `--max-scroll-ratio <value>` | Internal matcher default | Limit the maximum scroll offset as a fraction of frame height |
-| `--max-mean-diff <value>` | Internal matcher default | Set the maximum accepted mean pixel difference |
-| `--min-confidence <value>` | Internal matcher default | Set the minimum difference between the best and second-best matches |
-| `--stationary-threshold <value>` | Internal matcher default | Set the difference threshold used to treat a frame as stationary |
-| `--diagnostics <directory>` | Disabled | Write matching events and rejected frames for troubleshooting |
-| `--diagnostic-limit <count>` | `50` | Limit the number of rejected frame pairs saved |
-
-Go duration syntax is accepted by `--interval`, for example `50ms`, `250ms`, or `1s`.
+Normal launch takes no arguments and starts the tray host. The former coordinate scrolling-capture command and all previous command-line options have been removed. Configure scrolling and diagnostics through Settings or `screenshot-win.toml`.
 
 ## Project layout
 

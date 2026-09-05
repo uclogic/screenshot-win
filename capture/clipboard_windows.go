@@ -82,5 +82,5 @@ func openClipboardWithRetry() error {
 		lastErr = callErr
 		time.Sleep(15 * time.Millisecond)
 	}
-	return win32CallError("OpenClipboard", lastErr, "copying selected image")
+	return win32CallError("OpenClipboard", lastErr, "accessing clipboard")
 }

@@ -299,6 +299,35 @@ func TestPersistentToolbarQueuesOrdinaryActionWhileDrawingToolIsActive(t *testin
 	}
 }
 
+func TestToolbarPinMessageUsesButtonAction(t *testing.T) {
+	for _, drawing := range []bool{false, true} {
+		events := make(chan ToolbarEvent, 1)
+		state := &toolbarState{persistent: true, ready: true, events: events, actions: []Action{ActionPin}}
+		if drawing {
+			state.handlePersistentAction(ActionText)
+			<-events
+		}
+		const hwnd = 0x12345
+		toolbarStates.Store(hwnd, state)
+		toolbarWindowProcedure(hwnd, wmToolbarPin, 0, 0)
+		toolbarStates.Delete(hwnd)
+		if drawing {
+			if !state.pending || state.pendingAction != ActionPin {
+				t.Fatal("pin shortcut did not queue pin while annotating")
+			}
+			state.rearmPersistentActions()
+		}
+		select {
+		case event := <-events:
+			if event.Action != ActionPin {
+				t.Fatalf("shortcut action = %v, want pin", event.Action)
+			}
+		default:
+			t.Fatal("pin shortcut did not emit an action")
+		}
+	}
+}
+
 func TestPersistentToolbarReplacesQueuedActionWithoutRequiringAnotherToolExit(t *testing.T) {
 	events := make(chan ToolbarEvent, 1)
 	state := &toolbarState{persistent: true, ready: true, events: events}

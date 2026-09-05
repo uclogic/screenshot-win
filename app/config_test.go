@@ -14,7 +14,7 @@ func TestRunnerRunContextRejectsCancelledContextWithoutStartingSession(t *testin
 	cancel()
 	application := New()
 	runner := NewRunner(application, Runtime{})
-	err := runner.RunContext(ctx, Config{Interactive: true, Interval: time.Millisecond, MatchOptions: screenshotwin.DefaultMatchOptions()})
+	err := runner.RunContext(ctx, Config{Interval: time.Millisecond, MatchOptions: screenshotwin.DefaultMatchOptions()})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunContext() error = %v, want context canceled", err)
 	}
@@ -38,7 +38,6 @@ func TestConfigValidate(t *testing.T) {
 	if err := config.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	config.Interactive = true
 	config.Width = 0
 	config.Height = 0
 	if err := config.Validate(); err != nil {
@@ -50,7 +49,7 @@ func TestConfigValidateRejectsUnsafeRuntimeValues(t *testing.T) {
 	tests := []Config{
 		func() Config { config := validConfig(); config.Interval = 0; return config }(),
 		func() Config { config := validConfig(); config.DiagnosticMax = -1; return config }(),
-		func() Config { config := validConfig(); config.Width = 0; return config }(),
+		func() Config { config := validConfig(); config.CandidateMode = 99; return config }(),
 		func() Config { config := validConfig(); config.LongCaptureImplementation = 99; return config }(),
 	}
 	for _, config := range tests {

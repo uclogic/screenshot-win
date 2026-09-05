@@ -24,6 +24,7 @@ const (
 	wmUser         = 0x0400
 	wmToolbarReady = wmUser + 97
 	wmToolbarStyle = wmUser + 98
+	wmToolbarPin   = wmUser + 102
 
 	monitorDefaultToNearest = 2
 	colorWindow             = 5
@@ -470,6 +471,17 @@ func monitorWorkArea(region image.Rectangle) (image.Rectangle, error) {
 	return image.Rect(int(info.Work.Left), int(info.Work.Top), int(info.Work.Right), int(info.Work.Bottom)), nil
 }
 
+// TriggerPin posts the Pin button action to the current capture toolbar.
+// Posting keeps all toolbar and annotation state on its owning UI thread.
+func TriggerPin() bool {
+	hwnd := activeToolbarWindow.Load()
+	if hwnd == 0 {
+		return false
+	}
+	ok, _, _ := procPostMessage.Call(hwnd, wmToolbarPin, 0, 0)
+	return ok != 0
+}
+
 func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	value, found := toolbarStates.Load(hwnd)
 	if !found {
@@ -507,8 +519,17 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 		state.hovering = false
 		procInvalidateRect.Call(hwnd, 0, 0)
 		return 0
-	case wmLButtonUp:
+	case wmLButtonUp, wmToolbarPin:
 		action, ok := toolbarActionAtActions(mousePoint(lParam), state.clientSize, state.actions)
+		if message == wmToolbarPin {
+			action, ok = ActionPin, false
+			for _, available := range state.actions {
+				if available == ActionPin {
+					ok = true
+					break
+				}
+			}
+		}
 		if ok && toolbarActionEnabled(action) {
 			if state.persistent && (action == ActionColor || action == ActionWidth) {
 				state.toggleStylePanel(action)

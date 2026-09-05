@@ -22,6 +22,10 @@ const (
 	settingsIDTree            = 2001
 	settingsIDHotkey          = 2002
 	settingsIDLanguage        = 2003
+	settingsIDCandidateMode   = 2007
+	settingsIDPinHotkey       = 2004
+	settingsIDClearPinHotkey  = 2005
+	settingsIDClearHotkey     = 2006
 	settingsIDLongCaptureMode = 2100
 	settingsIDInterval        = 2101
 	settingsIDMaxScroll       = 2102
@@ -283,6 +287,7 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 		procSettingsDestroyWindow.Call(hwnd)
 		return 0
 	case settingsWMDestroy:
+		state.host.finishHotkeyRecording()
 		settingsWindows.Delete(hwnd)
 		if state.host.settings == state {
 			state.host.settings = nil
@@ -347,13 +352,28 @@ func (state *settingsWindow) createControls() error {
 		generalGroup := must(2301, "BUTTON", localize(language, textKeyboardShortcut), settingsBSGroupBox)
 		generalLabel := must(2302, "STATIC", localize(language, textStartCaptureLabel), 0)
 		hotkey := must(settingsIDHotkey, "msctls_hotkey32", "", settingsWSTabStop|settingsWSBorder)
+		clearCapture := must(settingsIDClearHotkey, "BUTTON", localize(language, textClearHotkey), settingsWSTabStop)
+		pinLabel := must(2305, "STATIC", localize(language, textPinClipboard), 0)
+		pinHotkey := must(settingsIDPinHotkey, "msctls_hotkey32", "", settingsWSTabStop|settingsWSBorder)
+		clearPin := must(settingsIDClearPinHotkey, "BUTTON", localize(language, textClearHotkey), settingsWSTabStop)
+		for _, control := range []uintptr{hotkey, pinHotkey} {
+			ok, _, err := procSettingsSetWindowSubclass.Call(control, settingsHotkeySubclass, 1, state.hwnd)
+			if ok == 0 {
+				panic(trayWin32Error("SetWindowSubclass", err))
+			}
+		}
 		generalHelp := must(2303, "STATIC", localize(language, textHotkeyHelp), 0)
 		languageLabel := must(2304, "STATIC", localize(language, textLanguageLabel), 0)
 		languageCombo := must(settingsIDLanguage, "COMBOBOX", "", settingsWSTabStop|settingsCBSDropDownList)
 		for _, option := range availableLanguages {
 			state.addComboString(languageCombo, option.Name)
 		}
-		state.general = []uintptr{generalGroup, generalLabel, hotkey, generalHelp, languageLabel, languageCombo}
+		candidateLabel := must(2306, "STATIC", localize(language, textCandidateMode), 0)
+		candidateCombo := must(settingsIDCandidateMode, "COMBOBOX", "", settingsWSTabStop|settingsCBSDropDownList)
+		for _, label := range []string{"none"} {
+			state.addComboString(candidateCombo, label)
+		}
+		state.general = []uintptr{candidateLabel, candidateCombo, generalGroup, generalLabel, hotkey, clearCapture, pinLabel, pinHotkey, clearPin, generalHelp, languageLabel, languageCombo}
 
 		captureGroup := must(2401, "BUTTON", localize(language, textScrollingMatching), settingsBSGroupBox)
 		modeLabel := must(2407, "STATIC", localize(language, textLongCaptureMode), 0)
@@ -377,8 +397,7 @@ func (state *settingsWindow) createControls() error {
 		browse := must(settingsIDBrowse, "BUTTON", localize(language, textBrowse), settingsWSTabStop)
 		limitLabel := must(2503, "STATIC", localize(language, textRejectedFrameLimit), 0)
 		limit := must(settingsIDDiagnosticLimit, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll|settingsESNumber)
-		overrideNote := must(2504, "STATIC", state.overrideMessage(), 0)
-		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary, diagnosticGroup, diagnostics, directoryLabel, directory, browse, limitLabel, limit, overrideNote}
+		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary, diagnosticGroup, diagnostics, directoryLabel, directory, browse, limitLabel, limit}
 
 		must(1, "BUTTON", localize(language, textOK), settingsWSTabStop|settingsBSDefaultPushButton)
 		must(2, "BUTTON", localize(language, textCancel), settingsWSTabStop)
@@ -413,12 +432,18 @@ func (state *settingsWindow) layout() {
 		}
 	}
 	move(settingsIDTree, 12, 12, 145, 388)
-	move(2301, 174, 12, 476, 150)
+	move(2301, 174, 12, 476, 255)
 	move(2302, 194, 48, 92, 22)
 	move(settingsIDHotkey, 292, 44, 190, 26)
-	move(2303, 194, 82, 390, 22)
-	move(2304, 194, 108, 92, 22)
-	move(settingsIDLanguage, 292, 104, 190, 120)
+	move(settingsIDClearHotkey, 492, 44, 76, 26)
+	move(2305, 194, 84, 96, 22)
+	move(settingsIDPinHotkey, 292, 80, 190, 26)
+	move(settingsIDClearPinHotkey, 492, 80, 76, 26)
+	move(2303, 194, 118, 432, 44)
+	move(2304, 194, 172, 92, 22)
+	move(settingsIDLanguage, 292, 168, 190, 120)
+	move(2306, 194, 215, 120, 22)
+	move(settingsIDCandidateMode, 315, 211, 310, 150)
 
 	move(2401, 174, 12, 476, 237)
 	move(2407, 194, 45, 160, 22)
@@ -437,7 +462,6 @@ func (state *settingsWindow) layout() {
 	move(settingsIDBrowse, 544, 309, 82, 26)
 	move(2503, 194, 347, 168, 22)
 	move(settingsIDDiagnosticLimit, 365, 344, 140, 24)
-	move(2504, 194, 372, 420, 20)
 
 	move(1, 410, 416, 76, 28)
 	move(2, 492, 416, 76, 28)
@@ -448,9 +472,13 @@ func (state *settingsWindow) load(value preferences) {
 	state.loading = true
 	defer func() { state.loading = false }()
 	hotkey, _ := parseConfiguredHotkey(value.General.Hotkey)
-	procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetRules, 0x0001, settingsHotkeyFCtrl|settingsHotkeyFAlt)
+	procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetRules, 0, 0)
 	procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetHotkey, uintptr(hotkeyToControl(hotkey)), 0)
+	pin, _ := parseConfiguredHotkey(value.General.PinHotkey)
+	procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetRules, 0, 0)
+	procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetHotkey, uintptr(hotkeyToControl(pin)), 0)
 	procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBSetCurrent, uintptr(languageIndex(value.General.Language)), 0)
+	procSettingsSendMessage.Call(state.controls[settingsIDCandidateMode], settingsCBSetCurrent, 0, 0)
 	modeIndex := uintptr(0)
 	if value.LongCapture.Mode == longCaptureModeLegacy {
 		modeIndex = 1
@@ -481,6 +509,12 @@ func (state *settingsWindow) handleCommand(id int, notification uint32) {
 		procSettingsDestroyWindow.Call(state.hwnd)
 	case settingsIDApply:
 		state.apply()
+	case settingsIDClearHotkey:
+		procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMSetHotkey, 0, 0)
+		state.setDirty(true)
+	case settingsIDClearPinHotkey:
+		procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetHotkey, 0, 0)
+		state.setDirty(true)
 	case settingsIDBrowse:
 		if notification == settingsBNClicked {
 			if path, ok := browseSettingsDirectory(state.hwnd); ok {
@@ -493,7 +527,7 @@ func (state *settingsWindow) handleCommand(id int, notification uint32) {
 			state.updateDiagnosticControls()
 			state.setDirty(true)
 		}
-	case settingsIDLanguage, settingsIDLongCaptureMode:
+	case settingsIDLanguage, settingsIDLongCaptureMode, settingsIDCandidateMode:
 		if notification == settingsCBNSelectionChange && !state.loading {
 			state.setDirty(true)
 		}
@@ -532,6 +566,11 @@ func (state *settingsWindow) apply() bool {
 
 func (state *settingsWindow) read() (preferences, uintptr, error) {
 	value := state.host.preferences
+	candidateIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDCandidateMode], settingsCBGetCurrent, 0, 0)
+	if candidateIndex != 0 {
+		return value, state.controls[settingsIDCandidateMode], fmt.Errorf("invalid candidate mode")
+	}
+	value.General.CandidateMode = candidateModeNames[candidateIndex]
 	languageIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBGetCurrent, 0, 0)
 	value.General.Language = languageEnglish
 	if int(languageIndex) < len(availableLanguages) {
@@ -539,10 +578,25 @@ func (state *settingsWindow) read() (preferences, uintptr, error) {
 	}
 	controlValue, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDHotkey], settingsHKMGetHotkey, 0, 0)
 	hotkey := hotkeyFromControl(uint16(controlValue))
-	if hotkey.Modifiers == 0 || hotkey.Key == 0 {
-		return value, state.controls[settingsIDHotkey], fmt.Errorf("截图快捷键必须包含 Ctrl、Alt 或 Shift 与一个普通按键")
+	value.General.Hotkey = ""
+	if controlValue != 0 {
+		if err := validateConfiguredHotkey(hotkey); err != nil {
+			return value, state.controls[settingsIDHotkey], err
+		}
+		value.General.Hotkey = formatConfiguredHotkey(hotkey)
 	}
-	value.General.Hotkey = formatConfiguredHotkey(hotkey)
+	pinValue, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMGetHotkey, 0, 0)
+	value.General.PinHotkey = ""
+	if pinValue != 0 {
+		pin := hotkeyFromControl(uint16(pinValue))
+		if err := validateConfiguredHotkey(pin); err != nil {
+			return value, state.controls[settingsIDPinHotkey], err
+		}
+		if pin == hotkey {
+			return value, state.controls[settingsIDPinHotkey], fmt.Errorf("截图和贴图不能使用相同的快捷键")
+		}
+		value.General.PinHotkey = formatConfiguredHotkey(pin)
+	}
 	modeIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLongCaptureMode], settingsCBGetCurrent, 0, 0)
 	value.LongCapture.Mode = longCaptureModeBidirectional
 	if modeIndex == 1 {
@@ -671,14 +725,6 @@ func (state *settingsWindow) readFloat(id int) (float64, error) {
 	return strconv.ParseFloat(strings.TrimSpace(state.text(id)), 64)
 }
 
-func (state *settingsWindow) overrideMessage() string {
-	overrides := state.host.overrides
-	if !overrides.Interval && !overrides.MaxScrollRatio && !overrides.MaxMeanDifference && !overrides.MinimumConfidence && !overrides.StationaryThreshold && !overrides.DiagnosticDirectory && !overrides.DiagnosticLimit {
-		return ""
-	}
-	return localize(state.host.preferences.General.Language, textOverrideNote)
-}
-
 func hotkeyToControl(value configuredHotkey) uint16 {
 	modifiers := uint16(0)
 	if value.Modifiers&hotkeyModifierShift != 0 {
@@ -730,4 +776,31 @@ func browseSettingsDirectory(owner uintptr) (string, bool) {
 		return "", false
 	}
 	return syscall.UTF16ToString(path), true
+}
+
+var (
+	procSettingsSetWindowSubclass    = settingsComctl32.NewProc("SetWindowSubclass")
+	procSettingsDefSubclassProc      = settingsComctl32.NewProc("DefSubclassProc")
+	procSettingsRemoveWindowSubclass = settingsComctl32.NewProc("RemoveWindowSubclass")
+	settingsHotkeySubclass           uintptr
+)
+
+func init() { settingsHotkeySubclass = syscall.NewCallback(settingsHotkeyProc) }
+
+func settingsHotkeyProc(hwnd uintptr, message uint32, wParam, lParam, id, parent uintptr) uintptr {
+	if message == 0x0082 {
+		procSettingsRemoveWindowSubclass.Call(hwnd, settingsHotkeySubclass, id)
+	} // WM_NCDESTROY
+	if value, ok := settingsWindows.Load(parent); ok {
+		state := value.(*settingsWindow)
+		switch message {
+		case 0x0007: // WM_SETFOCUS: allow recording even an already registered chord.
+			state.host.recordingHotkey = true
+			state.host.hotkeys.close()
+		case 0x0008: // WM_KILLFOCUS
+			state.host.finishHotkeyRecording()
+		}
+	}
+	result, _, _ := procSettingsDefSubclassProc.Call(hwnd, uintptr(message), wParam, lParam)
+	return result
 }

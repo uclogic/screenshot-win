@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"screenshot-win"
+	"screenshot-win/selector"
 )
 
 // LongCaptureImplementation selects the scrolling-capture engine. The zero
@@ -34,12 +35,11 @@ func (implementation LongCaptureImplementation) String() string {
 type Config struct {
 	X, Y                      int
 	Width, Height             int
-	OutputPath                string
 	Interval                  time.Duration
 	MatchOptions              screenshotwin.MatchOptions
 	DiagnosticDir             string
 	DiagnosticMax             int
-	Interactive               bool
+	CandidateMode             selector.CandidateMode
 	LongCaptureImplementation LongCaptureImplementation
 }
 
@@ -50,8 +50,8 @@ func (config Config) Validate() error {
 	if config.DiagnosticMax < 0 {
 		return fmt.Errorf("diagnostic limit must not be negative")
 	}
-	if !config.Interactive && (config.Width <= 0 || config.Height <= 0) {
-		return fmt.Errorf("width and height must be positive")
+	if !config.CandidateMode.Valid() {
+		return fmt.Errorf("unknown candidate mode %d", config.CandidateMode)
 	}
 	if !config.LongCaptureImplementation.valid() {
 		return fmt.Errorf("unknown long capture implementation %d", config.LongCaptureImplementation)

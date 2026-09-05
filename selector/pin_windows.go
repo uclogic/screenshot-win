@@ -35,6 +35,9 @@ var (
 	procPinDestroyMenu     = user32.NewProc("DestroyMenu")
 	procPinSetStretchMode  = gdi32.NewProc("SetStretchBltMode")
 	procPinStretchDIBits   = gdi32.NewProc("StretchDIBits")
+	procPinGetClipBox      = gdi32.NewProc("GetClipBox")
+	procPinGetClientRect   = user32.NewProc("GetClientRect")
+	procPinUpdateWindow    = user32.NewProc("UpdateWindow")
 	pinProcedure           = syscall.NewCallback(pinWindowProcedure)
 	pinStates              sync.Map
 	pinClassOnce           sync.Once
@@ -54,6 +57,9 @@ type pinWindowState struct {
 	pixels     []byte
 	bitmapInfo bitmapInfo
 	renderErr  error
+	vector     interface {
+		DrawToDC(uintptr, image.Point) error
+	}
 }
 
 func showPinnedWindow(source image.Image, origin image.Point) (*Pin, error) {
@@ -97,7 +103,8 @@ func ensurePinWindowClass() (uintptr, *uint16, error) {
 
 func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinStart, done chan<- struct{}) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// Retire this GUI thread on exit, including on startup failures that may
+	// leave WM_QUIT queued. Such messages must not reach another window loop.
 	defer close(done)
 	instance, className, err := ensurePinWindowClass()
 	if err != nil {
@@ -111,13 +118,18 @@ func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinS
 		return
 	}
 	bounds := pinInitialBounds(original, origin, workArea)
-	pixels := make([]byte, original.X*original.Y*4)
-	if err := copyImageToBGRA(pixels, original.X, original.Y, source); err != nil {
-		started <- pinStart{err: err}
-		return
+	state := &pinWindowState{original: original}
+	state.vector, _ = source.(interface {
+		DrawToDC(uintptr, image.Point) error
+	})
+	if state.vector == nil {
+		state.pixels = make([]byte, original.X*original.Y*4)
+		if err := copyImageToBGRA(state.pixels, original.X, original.Y, source); err != nil {
+			started <- pinStart{err: err}
+			return
+		}
+		state.bitmapInfo.Header = bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(original.X), Height: -int32(original.Y), Planes: 1, BitCount: 32, Compression: biRGB, SizeImage: uint32(len(state.pixels))}
 	}
-	state := &pinWindowState{original: original, pixels: pixels}
-	state.bitmapInfo.Header = bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(original.X), Height: -int32(original.Y), Planes: 1, BitCount: 32, Compression: biRGB, SizeImage: uint32(len(pixels))}
 	title, _ := syscall.UTF16PtrFromString("screenshot-win pinned image")
 	hwnd, _, callErr := procCreateWindowEx.Call(wsExTopmost|wsExToolWindow, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), wsPopup,
 		uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()), 0, 0, instance, 0)
@@ -130,11 +142,15 @@ func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinS
 	defer pinStates.Delete(hwnd)
 	procShowWindow.Call(hwnd, swShow)
 	procSetForegroundWindow.Call(hwnd)
-	started <- pinStart{hwnd: hwnd}
+	// Paint synchronously so startup rendering errors reach the capture UI.
+	procInvalidateRect.Call(hwnd, 0, 0)
+	procPinUpdateWindow.Call(hwnd)
+	started <- pinStart{hwnd: hwnd, err: state.renderErr}
 	var msg message
 	for {
 		status, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 		if int32(status) <= 0 {
+			procDestroyWindow.Call(hwnd)
 			break
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
@@ -233,15 +249,38 @@ func (state *pinWindowState) paint(hwnd uintptr) error {
 		return win32Error("BeginPaint", callErr)
 	}
 	defer procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-	bounds, ok := pinWindowBounds(hwnd)
-	if !ok {
-		return fmt.Errorf("GetWindowRect failed")
+	// An obscured window or an internal WM_PAINT can have nothing to draw.
+	// StretchDIBits returning zero in that case is not a rendering failure.
+	var clip rect
+	clipKind, _, callErr := procPinGetClipBox.Call(dc, uintptr(unsafe.Pointer(&clip)))
+	if clipKind == 0 {
+		return win32Error("GetClipBox", callErr)
 	}
-	procPinSetStretchMode.Call(dc, dibStretchHalftone)
-	result, _, callErr := procPinStretchDIBits.Call(dc, 0, 0, uintptr(bounds.Dx()), uintptr(bounds.Dy()), 0, 0,
-		uintptr(state.original.X), uintptr(state.original.Y), uintptr(unsafe.Pointer(&state.pixels[0])), uintptr(unsafe.Pointer(&state.bitmapInfo)), dibRGBColors, rasterSourceCopy)
-	if int32(result) == -1 {
-		return win32Error("StretchDIBits", callErr)
+	if clipKind == 1 { // NULLREGION
+		return nil
 	}
-	return nil
+	var client rect
+	if ok, _, callErr := procPinGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client))); ok == 0 {
+		return win32Error("GetClientRect", callErr)
+	}
+	if state.vector != nil {
+		return state.vector.DrawToDC(dc, image.Pt(int(client.Right-client.Left), int(client.Bottom-client.Top)))
+	}
+	return drawPinWithFallback(func(mode uintptr) int32 {
+		procPinSetStretchMode.Call(dc, mode)
+		result, _, _ := procPinStretchDIBits.Call(dc, 0, 0, uintptr(client.Right-client.Left), uintptr(client.Bottom-client.Top), 0, 0,
+			uintptr(state.original.X), uintptr(state.original.Y), uintptr(unsafe.Pointer(&state.pixels[0])), uintptr(unsafe.Pointer(&state.bitmapInfo)), dibRGBColors, rasterSourceCopy)
+		return int32(result)
+	})
+}
+
+func drawPinWithFallback(draw func(uintptr) int32) error {
+	// Some display drivers fail HALFTONE scaling. Retry with COLORONCOLOR
+	// before giving up; zero scan lines is a failure as well as GDI_ERROR.
+	for _, mode := range []uintptr{dibStretchHalftone, 3 /* COLORONCOLOR */} {
+		if result := draw(mode); result != 0 && result != -1 {
+			return nil
+		}
+	}
+	return fmt.Errorf("StretchDIBits failed to draw pinned image")
 }

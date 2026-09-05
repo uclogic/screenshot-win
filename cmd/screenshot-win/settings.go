@@ -13,6 +13,7 @@ import (
 
 	"screenshot-win"
 	application "screenshot-win/app"
+	"screenshot-win/selector"
 )
 
 const settingsFileName = "screenshot-win.toml"
@@ -28,9 +29,22 @@ type preferences struct {
 	Diagnostics diagnosticPreferences  `toml:"diagnostics"`
 }
 
+var candidateModeNames = []string{"none", "windows_ui_interface", "minimal_rectangle"}
+
+func candidateModeIndex(name string) int {
+	for i, v := range candidateModeNames {
+		if v == name {
+			return i
+		}
+	}
+	return -1
+}
+
 type generalPreferences struct {
-	Hotkey   string `toml:"hotkey"`
-	Language string `toml:"language"`
+	CandidateMode string `toml:"candidate_mode"`
+	Hotkey        string `toml:"hotkey"`
+	PinHotkey     string `toml:"pin_hotkey"`
+	Language      string `toml:"language"`
 }
 
 type longCapturePreferences struct {
@@ -62,7 +76,7 @@ const (
 func defaultPreferences() preferences {
 	match := screenshotwin.DefaultMatchOptions()
 	return preferences{
-		General: generalPreferences{Hotkey: "Alt+Shift+A", Language: languageEnglish},
+		General: generalPreferences{CandidateMode: "none", Hotkey: "Alt+Shift+A", Language: languageEnglish},
 		LongCapture: longCapturePreferences{
 			Mode:                longCaptureModeLegacy,
 			IntervalMS:          int(defaultCaptureInterval / time.Millisecond),
@@ -94,7 +108,8 @@ func loadPreferences(path string) (preferences, error) {
 	if err := result.Validate(); err != nil {
 		return defaultPreferences(), fmt.Errorf("设置文件 %q 无效：%w", path, err)
 	}
-	result.General.Hotkey = mustFormatHotkey(result.General.Hotkey)
+	result.General.Hotkey = normalizeOptionalHotkey(result.General.Hotkey)
+	result.General.PinHotkey = normalizeOptionalHotkey(result.General.PinHotkey)
 	return result, nil
 }
 
@@ -102,7 +117,8 @@ func savePreferences(path string, value preferences) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
-	value.General.Hotkey = mustFormatHotkey(value.General.Hotkey)
+	value.General.Hotkey = normalizeOptionalHotkey(value.General.Hotkey)
+	value.General.PinHotkey = normalizeOptionalHotkey(value.General.PinHotkey)
 	data, err := toml.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("编码设置：%w", err)
@@ -136,6 +152,9 @@ func savePreferences(path string, value preferences) error {
 }
 
 func (value preferences) Validate() error {
+	if candidateModeIndex(value.General.CandidateMode) < 0 {
+		return fmt.Errorf("invalid candidate mode %q", value.General.CandidateMode)
+	}
 	if !supportedLanguage(value.General.Language) {
 		codes := make([]string, 0, len(availableLanguages))
 		for _, language := range availableLanguages {
@@ -143,8 +162,20 @@ func (value preferences) Validate() error {
 		}
 		return fmt.Errorf("language must be one of: %s", strings.Join(codes, ", "))
 	}
-	if _, err := parseConfiguredHotkey(value.General.Hotkey); err != nil {
-		return fmt.Errorf("截图快捷键：%w", err)
+	if strings.TrimSpace(value.General.Hotkey) != "" {
+		if _, err := parseConfiguredHotkey(value.General.Hotkey); err != nil {
+			return fmt.Errorf("截图快捷键：%w", err)
+		}
+	}
+	if strings.TrimSpace(value.General.PinHotkey) != "" {
+		pin, err := parseConfiguredHotkey(value.General.PinHotkey)
+		if err != nil {
+			return fmt.Errorf("贴图快捷键：%w", err)
+		}
+		capture, _ := parseConfiguredHotkey(value.General.Hotkey)
+		if pin == capture {
+			return fmt.Errorf("截图和贴图不能使用相同的快捷键")
+		}
 	}
 	if value.LongCapture.Mode != longCaptureModeBidirectional && value.LongCapture.Mode != longCaptureModeLegacy {
 		return fmt.Errorf("长截图模式必须是 %q 或 %q", longCaptureModeBidirectional, longCaptureModeLegacy)
@@ -171,6 +202,7 @@ func (value preferences) Validate() error {
 }
 
 func (value preferences) apply(config application.Config, programDirectory string) application.Config {
+	config.CandidateMode = selector.CandidateMode(candidateModeIndex(value.General.CandidateMode))
 	config.LongCaptureImplementation = application.LongCaptureBidirectional
 	if value.LongCapture.Mode == longCaptureModeLegacy {
 		config.LongCaptureImplementation = application.LongCaptureLegacy
@@ -201,9 +233,6 @@ func resolveSettingsPath(programDirectory, path string) string {
 func parseConfiguredHotkey(text string) (configuredHotkey, error) {
 	var result configuredHotkey
 	parts := strings.Split(text, "+")
-	if len(parts) < 2 {
-		return result, fmt.Errorf("必须包含 Ctrl、Alt 或 Shift 修饰键")
-	}
 	for _, raw := range parts {
 		part := strings.ToUpper(strings.TrimSpace(raw))
 		switch part {
@@ -224,8 +253,8 @@ func parseConfiguredHotkey(text string) (configuredHotkey, error) {
 			result.Key = key
 		}
 	}
-	if result.Modifiers == 0 || result.Key == 0 {
-		return configuredHotkey{}, fmt.Errorf("必须包含修饰键和一个普通按键")
+	if err := validateConfiguredHotkey(result); err != nil {
+		return configuredHotkey{}, err
 	}
 	return result, nil
 }
@@ -296,4 +325,24 @@ func hotkeyKeyName(key uint32) string {
 func mustFormatHotkey(text string) string {
 	value, _ := parseConfiguredHotkey(text)
 	return formatConfiguredHotkey(value)
+}
+
+func validateConfiguredHotkey(value configuredHotkey) error {
+	if value.Key == 0 || value.Key == 0x10 || value.Key == 0x11 || value.Key == 0x12 || value.Key >= 0xA0 && value.Key <= 0xA5 || value.Key == 0x5B || value.Key == 0x5C {
+		return fmt.Errorf("必须指定一个非修饰按键")
+	}
+	if value.Key == 0x7B {
+		return fmt.Errorf("F12 为 Windows 调试器保留，请选择其他按键")
+	}
+	if value.Modifiers == 0 && (value.Key < 0x70 || value.Key > 0x7A) {
+		return fmt.Errorf("请使用 Ctrl、Alt、Shift 与一个按键组合，或单独 F1–F11")
+	}
+	return nil
+}
+
+func normalizeOptionalHotkey(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return mustFormatHotkey(text)
 }

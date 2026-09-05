@@ -23,6 +23,8 @@ const (
 	textStartCapture               = "start_capture"
 	textStartCaptureLabel          = "start_capture_label"
 	textHotkeyHelp                 = "hotkey_help"
+	textPinClipboard               = "pin_clipboard"
+	textClearHotkey                = "clear_hotkey"
 	textLanguageLabel              = "language_label"
 	textScrollingMatching          = "scrolling_matching"
 	textLongCaptureMode            = "long_capture_mode"
@@ -41,7 +43,8 @@ const (
 	textOK                         = "ok"
 	textCancel                     = "cancel"
 	textApply                      = "apply"
-	textOverrideNote               = "override_note"
+	textCandidateMode              = "candidate_mode"
+	textCandidateWindowsUI         = "candidate_windows_ui"
 	textSelectDiagnosticsDirectory = "select_diagnostics_directory"
 	textAlreadyRunning             = "already_running"
 	textSettingsMenu               = "settings_menu"
@@ -53,25 +56,25 @@ const (
 var catalogs = map[string]map[string]string{
 	languageEnglish: {
 		textSettings: "Settings", textGeneral: "General", textAdvanced: "Advanced", textKeyboardShortcut: "Keyboard shortcut",
-		textStartCapture: "Start capture", textStartCaptureLabel: "Start capture:", textHotkeyHelp: "Combine Ctrl, Alt, or Shift with one regular key.", textLanguageLabel: "Language:",
+		textStartCapture: "Start capture", textStartCaptureLabel: "Start capture:", textPinClipboard: "Pin clipboard", textClearHotkey: "Clear", textHotkeyHelp: "Ctrl / Alt / Shift + a key, or F1–F11. Both shortcuts are optional.", textLanguageLabel: "Language:",
 		textScrollingMatching: "Scrolling capture matching", textLongCaptureMode: "Capture direction:", textLongCaptureBidirectional: "Bidirectional (up and down)", textLongCaptureLegacy: "One-way (down only, legacy)",
 		textCaptureInterval: "Capture interval (ms):", textMaxScrollRatio: "Maximum scroll ratio:",
 		textMaxMeanDifference: "Maximum mean difference:", textMinConfidence: "Minimum confidence:", textStationaryThreshold: "Stationary threshold:",
 		textDiagnostics: "Diagnostics", textSaveDiagnostics: "Save diagnostic data", textDirectory: "Directory:", textBrowse: "Browse…",
 		textRejectedFrameLimit: "Rejected frame pair limit:", textOK: "OK", textCancel: "Cancel", textApply: "Apply",
-		textOverrideNote:               "Some settings are overridden by command-line options; saved values apply on the next normal launch.",
+		textCandidateMode: "Candidate mode:", textCandidateWindowsUI: "windows ui interface (not implemented)",
 		textSelectDiagnosticsDirectory: "Select diagnostics directory", textAlreadyRunning: "screenshot-win is already running in the notification area.",
 		textSettingsMenu: "Settings…", textExit: "Exit", textPNGFilter: "PNG image (*.png)\x00*.png\x00All files (*.*)\x00*.*\x00\x00", textSaveScreenshot: "Save screenshot",
 	},
 	languageChinese: {
 		textSettings: "设置", textGeneral: "常规", textAdvanced: "高级", textKeyboardShortcut: "快捷键", textStartCapture: "开始截图",
-		textStartCaptureLabel: "开始截图：", textHotkeyHelp: "请使用 Ctrl、Alt 或 Shift 与一个普通按键组合。", textLanguageLabel: "语言：",
+		textStartCaptureLabel: "开始截图：", textPinClipboard: "剪贴板贴图", textClearHotkey: "清除", textHotkeyHelp: "Ctrl / Alt / Shift + 按键，或单独 F1–F11。截图和贴图快捷键均可留空。", textLanguageLabel: "语言：",
 		textScrollingMatching: "长截图匹配", textLongCaptureMode: "截图方向：", textLongCaptureBidirectional: "双向（向上和向下）", textLongCaptureLegacy: "单向（仅向下，旧版）",
 		textCaptureInterval: "截图间隔（毫秒）：", textMaxScrollRatio: "最大滚动比例：",
 		textMaxMeanDifference: "最大平均差异：", textMinConfidence: "最小置信度：", textStationaryThreshold: "静止判定阈值：",
 		textDiagnostics: "诊断", textSaveDiagnostics: "保存诊断数据", textDirectory: "目录：", textBrowse: "浏览…",
 		textRejectedFrameLimit: "拒绝帧对保存上限：", textOK: "确定", textCancel: "取消", textApply: "应用",
-		textOverrideNote: "部分设置当前由命令行覆盖；保存值将在下次普通启动时生效。", textSelectDiagnosticsDirectory: "选择诊断数据目录",
+		textCandidateMode: "候选框实现：", textCandidateWindowsUI: "windows ui interface（未实现）", textSelectDiagnosticsDirectory: "选择诊断数据目录",
 		textAlreadyRunning: "screenshot-win 已在通知区域运行。", textSettingsMenu: "设置…", textExit: "退出",
 		textPNGFilter: "PNG 图片 (*.png)\x00*.png\x00所有文件 (*.*)\x00*.*\x00\x00", textSaveScreenshot: "保存截图",
 	},
