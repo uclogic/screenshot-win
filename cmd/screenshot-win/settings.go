@@ -26,7 +26,6 @@ const (
 type preferences struct {
 	General     generalPreferences     `toml:"general"`
 	LongCapture longCapturePreferences `toml:"long_capture"`
-	Diagnostics diagnosticPreferences  `toml:"diagnostics"`
 }
 
 var candidateModeNames = []string{"none", "windows_ui_interface", "minimal_rectangle"}
@@ -56,12 +55,6 @@ type longCapturePreferences struct {
 	StationaryThreshold float64 `toml:"stationary_threshold"`
 }
 
-type diagnosticPreferences struct {
-	Enabled   bool   `toml:"enabled"`
-	Directory string `toml:"directory"`
-	Limit     int    `toml:"limit"`
-}
-
 type configuredHotkey struct {
 	Modifiers uint32
 	Key       uint32
@@ -85,7 +78,6 @@ func defaultPreferences() preferences {
 			MinimumConfidence:   match.MinimumConfidence,
 			StationaryThreshold: match.StationaryDifference,
 		},
-		Diagnostics: diagnosticPreferences{Directory: "diagnostics", Limit: 50},
 	}
 }
 
@@ -192,16 +184,10 @@ func (value preferences) Validate() error {
 	if err := match.Validate(); err != nil {
 		return fmt.Errorf("长截图匹配参数：%w", err)
 	}
-	if value.Diagnostics.Enabled && strings.TrimSpace(value.Diagnostics.Directory) == "" {
-		return fmt.Errorf("启用诊断时目录不能为空")
-	}
-	if value.Diagnostics.Limit < 0 {
-		return fmt.Errorf("诊断上限不能为负数")
-	}
 	return nil
 }
 
-func (value preferences) apply(config application.Config, programDirectory string) application.Config {
+func (value preferences) apply(config application.Config) application.Config {
 	config.CandidateMode = selector.CandidateMode(candidateModeIndex(value.General.CandidateMode))
 	config.LongCaptureImplementation = application.LongCaptureBidirectional
 	if value.LongCapture.Mode == longCaptureModeLegacy {
@@ -214,20 +200,7 @@ func (value preferences) apply(config application.Config, programDirectory strin
 		MinimumConfidence:    value.LongCapture.MinimumConfidence,
 		StationaryDifference: value.LongCapture.StationaryThreshold,
 	}
-	config.DiagnosticMax = value.Diagnostics.Limit
-	config.DiagnosticDir = ""
-	if value.Diagnostics.Enabled {
-		config.DiagnosticDir = resolveSettingsPath(programDirectory, value.Diagnostics.Directory)
-	}
 	return config
-}
-
-func resolveSettingsPath(programDirectory, path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(programDirectory, path)
 }
 
 func parseConfiguredHotkey(text string) (configuredHotkey, error) {

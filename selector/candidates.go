@@ -2,10 +2,13 @@ package selector
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"os"
 	"sort"
+	"time"
 )
 
 // CandidateMode selects automatic region suggestions. The zero value is manual.
@@ -20,8 +23,8 @@ const (
 func (m CandidateMode) Valid() bool { return m <= CandidateMinimalRectangle }
 
 // DetectRectangles returns unique, axis-aligned candidates in image-local
-// coordinates, ordered by area then coordinates. Both edge components and
-// enclosed regions are examined so nested rectangles survive contour retrieval.
+// coordinates, ordered by area then coordinates. Horizontal and vertical
+// segments are combined without requiring a connected or closed contour.
 func DetectRectangles(ctx context.Context, source image.Image) ([]image.Rectangle, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -37,89 +40,67 @@ func DetectRectangles(ctx context.Context, source image.Image) ([]image.Rectangl
 	if w < 100 || h < 80 {
 		return nil, nil
 	}
+	started := time.Now()
+	stage := started
+	var edgesTime, horizontalTime, verticalTime, combineTime, sortTime, deduplicateTime time.Duration
+	var rawCount, uniqueCount int
+	defer func() {
+		fmt.Fprintf(os.Stderr, "[minimal-rectangle] detection size=%dx%d edges=%s horizontal=%s vertical=%s combine=%s sort=%s deduplicate=%s total=%s raw=%d unique=%d context_error=%v\n", w, h, edgesTime, horizontalTime, verticalTime, combineTime, sortTime, deduplicateTime, time.Since(started), rawCount, uniqueCount, ctx.Err())
+	}()
 	edges, err := candidateEdges(ctx, source)
+	edgesTime = time.Since(stage)
+	stage = time.Now()
 	if err != nil {
 		return nil, err
 	}
-	// Bridge only short horizontal/vertical gaps, without joining distant text.
-	closed := append([]bool(nil), edges...)
-	for y := 1; y < h-1; y++ {
-		if y%64 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
+	horizontal, err := candidateLines(ctx, edges, w, h, false)
+	horizontalTime = time.Since(stage)
+	stage = time.Now()
+	if err != nil {
+		return nil, err
+	}
+	vertical, err := candidateLines(ctx, edges, w, h, true)
+	verticalTime = time.Since(stage)
+	stage = time.Now()
+	if err != nil {
+		return nil, err
+	}
+	var rectangles []image.Rectangle
+	// Lines are indexed by their fixed coordinate. Restrict side lookups to
+	// the overlap of the two horizontal spans, including rounded corners.
+	for ti, top := range horizontal {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		for x := 1; x < w-1; x++ {
-			i := y*w + x
-			if edges[i] {
+		for _, bottom := range horizontal[ti+1:] {
+			if bottom.pos-top.pos+1 < 80 {
 				continue
 			}
-			closed[i] = edges[i-1] && edges[i+1] || edges[i-w] && edges[i+w]
-		}
-	}
-	seen := make([]bool, w*h)
-	queue := make([]int32, 0, w*h)
-	var rectangles []image.Rectangle
-	for seed := range closed {
-		if seed%4096 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+			lo, hi := max(top.start, bottom.start)-12, min(top.end, bottom.end)+12
+			first := sort.Search(len(vertical), func(i int) bool { return vertical[i].pos >= lo })
+			var sides []candidateLine
+			for vi := first; vi < len(vertical) && vertical[vi].pos <= hi; vi++ {
+				v := vertical[vi]
+				if v.supports(top.pos, bottom.pos) {
+					sides = append(sides, v)
+				}
 			}
-		}
-		if seen[seed] {
-			continue
-		}
-		kind := closed[seed]
-		seen[seed] = true
-		queue = append(queue[:0], int32(seed))
-		left, top, right, bottom := seed%w, seed/w, seed%w, seed/w
-		touchesBorder := false
-		for head := 0; head < len(queue); head++ {
-			if head%4096 == 0 {
+			for li, left := range sides {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-			}
-			i := int(queue[head])
-			x, y := i%w, i/w
-			left, top, right, bottom = min(left, x), min(top, y), max(right, x), max(bottom, y)
-			touchesBorder = touchesBorder || x == 0 || y == 0 || x == w-1 || y == h-1
-			for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}} {
-				nx, ny := x+d[0], y+d[1]
-				if nx < 0 || nx >= w || ny < 0 || ny >= h {
-					continue
-				}
-				n := ny*w + nx
-				if !seen[n] && closed[n] == kind {
-					seen[n] = true
-					queue = append(queue, int32(n))
+				for _, right := range sides[li+1:] {
+					if right.pos-left.pos+1 < 100 || !top.supports(left.pos, right.pos) || !bottom.supports(left.pos, right.pos) {
+						continue
+					}
+					rectangles = append(rectangles, image.Rect(left.pos, top.pos, right.pos+1, bottom.pos+1))
 				}
 			}
 		}
-		if !kind && touchesBorder {
-			continue
-		}
-		r := image.Rect(left, top, right+1, bottom+1)
-		if r.Dx() < 96 || r.Dy() < 76 {
-			continue
-		}
-		if !rectangleSupported(closed, w, h, r) {
-			continue
-		}
-		// Canny traces the two sides of a thin border. Map the outside
-		// component / enclosed interior back to the border center before
-		// applying the minimum size, so a 99px box does not become 101px.
-		if kind {
-			r = r.Inset(1)
-		} else {
-			r = r.Inset(-2)
-		}
-		r = r.Intersect(image.Rect(0, 0, w, h))
-		if r.Dx() < 100 || r.Dy() < 80 {
-			continue
-		}
-		rectangles = append(rectangles, r)
 	}
+	combineTime = time.Since(stage)
+	rawCount = len(rectangles)
+	stage = time.Now()
 	sort.Slice(rectangles, func(i, j int) bool {
 		a, b := rectangles[i], rectangles[j]
 		if a.Dx()*a.Dy() != b.Dx()*b.Dy() {
@@ -136,19 +117,42 @@ func DetectRectangles(ctx context.Context, source image.Image) ([]image.Rectangl
 		}
 		return a.Max.X < b.Max.X
 	})
+	sortTime = time.Since(stage)
+	stage = time.Now()
 	unique := make([]image.Rectangle, 0, len(rectangles))
-	for _, r := range rectangles {
+	// Bucket all four coordinates so dense grids do not require comparing
+	// each rectangle with every previously accepted rectangle.
+	buckets := make(map[[4]int][]image.Rectangle)
+	for index, r := range rectangles {
+		if index%1024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		duplicate := false
-		for _, old := range unique {
-			if candidateAbs(r.Min.X-old.Min.X) <= 3 && candidateAbs(r.Min.Y-old.Min.Y) <= 3 && candidateAbs(r.Max.X-old.Max.X) <= 3 && candidateAbs(r.Max.Y-old.Max.Y) <= 3 {
-				duplicate = true
-				break
+	search:
+		for x0 := (r.Min.X - 3) / 4; x0 <= (r.Min.X+3)/4; x0++ {
+			for y0 := (r.Min.Y - 3) / 4; y0 <= (r.Min.Y+3)/4; y0++ {
+				for x1 := (r.Max.X - 3) / 4; x1 <= (r.Max.X+3)/4; x1++ {
+					for y1 := (r.Max.Y - 3) / 4; y1 <= (r.Max.Y+3)/4; y1++ {
+						for _, old := range buckets[[4]int{x0, y0, x1, y1}] {
+							if candidateAbs(r.Min.X-old.Min.X) <= 3 && candidateAbs(r.Min.Y-old.Min.Y) <= 3 && candidateAbs(r.Max.X-old.Max.X) <= 3 && candidateAbs(r.Max.Y-old.Max.Y) <= 3 {
+								duplicate = true
+								break search
+							}
+						}
+					}
+				}
 			}
 		}
 		if !duplicate {
 			unique = append(unique, r)
+			key := [4]int{r.Min.X / 4, r.Min.Y / 4, r.Max.X / 4, r.Max.Y / 4}
+			buckets[key] = append(buckets[key], r)
 		}
 	}
+	deduplicateTime = time.Since(stage)
+	uniqueCount = len(unique)
 	return unique, ctx.Err()
 }
 
@@ -159,50 +163,9 @@ func candidateAbs(n int) int {
 	return n
 }
 
-// Validate all four sides, rather than accepting an arbitrary contour's box.
-func rectangleSupported(edges []bool, w, h int, r image.Rectangle) bool {
-	hit := func(x, y int, vertical bool) bool {
-		for d := -2; d <= 2; d++ {
-			nx, ny := x, y
-			if vertical {
-				nx += d
-			} else {
-				ny += d
-			}
-			if nx >= 0 && nx < w && ny >= 0 && ny < h && edges[ny*w+nx] {
-				return true
-			}
-		}
-		return false
-	}
-	for _, x := range []int{r.Min.X, r.Max.X - 1} {
-		count := 0
-		for y := r.Min.Y; y < r.Max.Y; y++ {
-			if hit(x, y, true) {
-				count++
-			}
-		}
-		if count*100 < r.Dy()*85 {
-			return false
-		}
-	}
-	for _, y := range []int{r.Min.Y, r.Max.Y - 1} {
-		count := 0
-		for x := r.Min.X; x < r.Max.X; x++ {
-			if hit(x, y, false) {
-				count++
-			}
-		}
-		if count*100 < r.Dx()*85 {
-			return false
-		}
-	}
-	return true
-}
-
-// Canny: Gaussian smoothing, Sobel gradient, nonmaximum suppression and
-// hysteresis. Fixed thresholds are in 8-bit intensity-gradient units.
-func candidateEdges(ctx context.Context, source image.Image) ([]bool, error) {
+// Directional nonmaximum-suppressed gradients. Long-line support validates
+// weak edges instead of requiring them to connect to a strong edge seed.
+func candidateEdges(ctx context.Context, source image.Image) ([]uint8, error) {
 	b := source.Bounds()
 	w, h := b.Dx(), b.Dy()
 	gray := make([]uint8, w*h)
@@ -224,6 +187,11 @@ func candidateEdges(ctx context.Context, source image.Image) ([]bool, error) {
 	}
 	blur := make([]uint8, w*h)
 	for y := 1; y < h-1; y++ {
+		if y%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		for x := 1; x < w-1; x++ {
 			i := y*w + x
 			blur[i] = uint8((int(gray[i-w-1]) + 2*int(gray[i-w]) + int(gray[i-w+1]) + 2*int(gray[i-1]) + 4*int(gray[i]) + 2*int(gray[i+1]) + int(gray[i+w-1]) + 2*int(gray[i+w]) + int(gray[i+w+1])) / 16)
@@ -254,36 +222,28 @@ func candidateEdges(ctx context.Context, source image.Image) ([]bool, error) {
 			}
 		}
 	}
-	weak := make([]bool, w*h)
-	edges := make([]bool, w*h)
-	queue := make([]int, 0)
+	edges := make([]uint8, w*h)
 	for y := 2; y < h-2; y++ {
-		for x := 2; x < w-2; x++ {
-			i := y*w + x
-			offsets := [4]int{1, w + 1, w, w - 1}
-			d := offsets[direction[i]]
-			if mag[i] >= 40 && mag[i] >= mag[i-d] && mag[i] >= mag[i+d] {
-				weak[i] = true
-				if mag[i] >= 100 {
-					edges[i] = true
-					queue = append(queue, i)
-				}
-			}
-		}
-	}
-	for head := 0; head < len(queue); head++ {
-		if head%4096 == 0 {
+		if y%64 == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 		}
-		i := queue[head]
-		for dy := -1; dy <= 1; dy++ {
-			for dx := -1; dx <= 1; dx++ {
-				n := i + dy*w + dx
-				if n >= 0 && n < len(edges) && weak[n] && !edges[n] {
-					edges[n] = true
-					queue = append(queue, n)
+		for x := 2; x < w-2; x++ {
+			i := y*w + x
+			if direction[i] != 0 && direction[i] != 2 {
+				continue
+			}
+			d := 1
+			bit := uint8(1) // vertical line (horizontal gradient)
+			if direction[i] == 2 {
+				d = w
+				bit = 2
+			}
+			if mag[i] >= 20 && mag[i] >= mag[i-d] && mag[i] >= mag[i+d] {
+				edges[i] = bit
+				if mag[i] >= 100 {
+					edges[i] |= bit << 2
 				}
 			}
 		}

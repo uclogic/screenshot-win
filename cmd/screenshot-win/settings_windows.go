@@ -18,11 +18,9 @@ const (
 	settingsClassName = "ScreenshotWinSettings"
 
 	settingsIDApply           = 3
-	settingsIDBrowse          = 4
 	settingsIDTree            = 2001
 	settingsIDHotkey          = 2002
 	settingsIDLanguage        = 2003
-	settingsIDCandidateMode   = 2007
 	settingsIDPinHotkey       = 2004
 	settingsIDClearPinHotkey  = 2005
 	settingsIDClearHotkey     = 2006
@@ -32,9 +30,6 @@ const (
 	settingsIDMaxDifference   = 2103
 	settingsIDMinConfidence   = 2104
 	settingsIDStationary      = 2105
-	settingsIDDiagnostics     = 2201
-	settingsIDDiagnosticDir   = 2202
-	settingsIDDiagnosticLimit = 2203
 
 	settingsWMCreate     = 0x0001
 	settingsWMDestroy    = 0x0002
@@ -54,7 +49,6 @@ const (
 	settingsWSExControlParent = 0x00010000
 
 	settingsBSDefaultPushButton = 0x00000001
-	settingsBSAutoCheckBox      = 0x00000003
 	settingsBSGroupBox          = 0x00000007
 	settingsCBSDropDownList     = 0x00000003
 	settingsESAutoHScroll       = 0x00000080
@@ -77,11 +71,7 @@ const (
 	settingsHotkeyFCtrl  = 0x02
 	settingsHotkeyFAlt   = 0x04
 
-	settingsBMGetCheck         = 0x00F0
-	settingsBMSetCheck         = 0x00F1
-	settingsBSTChecked         = 1
 	settingsENChange           = 0x0300
-	settingsBNClicked          = 0
 	settingsCBNSelectionChange = 1
 	settingsCBAddString        = 0x0143
 	settingsCBGetCurrent       = 0x0147
@@ -93,39 +83,30 @@ const (
 	settingsWMSetFont      = 0x0030
 	settingsDefaultGUIFont = 17
 
-	settingsICCWin95Classes     = 0x000000FF
-	settingsBIFReturnOnlyFSDirs = 0x00000001
-	settingsBIFNewDialogStyle   = 0x00000040
+	settingsICCWin95Classes = 0x000000FF
 )
 
 var (
-	settingsUser32                = syscall.NewLazyDLL("user32.dll")
-	settingsGDI32                 = syscall.NewLazyDLL("gdi32.dll")
-	settingsComctl32              = syscall.NewLazyDLL("comctl32.dll")
-	settingsShell32               = syscall.NewLazyDLL("shell32.dll")
-	settingsOle32                 = syscall.NewLazyDLL("ole32.dll")
-	procSettingsCreateWindowEx    = settingsUser32.NewProc("CreateWindowExW")
-	procSettingsDefWindowProc     = settingsUser32.NewProc("DefWindowProcW")
-	procSettingsDestroyWindow     = settingsUser32.NewProc("DestroyWindow")
-	procSettingsEnableWindow      = settingsUser32.NewProc("EnableWindow")
-	procSettingsGetDPIForWindow   = settingsUser32.NewProc("GetDpiForWindow")
-	procSettingsGetWindowText     = settingsUser32.NewProc("GetWindowTextW")
-	procSettingsGetWindowTextLen  = settingsUser32.NewProc("GetWindowTextLengthW")
-	procSettingsLoadCursor        = settingsUser32.NewProc("LoadCursorW")
-	procSettingsRegisterClassEx   = settingsUser32.NewProc("RegisterClassExW")
-	procSettingsSendMessage       = settingsUser32.NewProc("SendMessageW")
-	procSettingsSetFocus          = settingsUser32.NewProc("SetFocus")
-	procSettingsSetForeground     = settingsUser32.NewProc("SetForegroundWindow")
-	procSettingsSetWindowPos      = settingsUser32.NewProc("SetWindowPos")
-	procSettingsSetWindowText     = settingsUser32.NewProc("SetWindowTextW")
-	procSettingsShowWindow        = settingsUser32.NewProc("ShowWindow")
-	procSettingsGetStockObject    = settingsGDI32.NewProc("GetStockObject")
-	procSettingsInitControls      = settingsComctl32.NewProc("InitCommonControlsEx")
-	procSettingsBrowseForFolder   = settingsShell32.NewProc("SHBrowseForFolderW")
-	procSettingsGetPathFromIDList = settingsShell32.NewProc("SHGetPathFromIDListW")
-	procSettingsCoInitializeEx    = settingsOle32.NewProc("CoInitializeEx")
-	procSettingsCoUninitialize    = settingsOle32.NewProc("CoUninitialize")
-	procSettingsCoTaskMemFree     = settingsOle32.NewProc("CoTaskMemFree")
+	settingsUser32               = syscall.NewLazyDLL("user32.dll")
+	settingsGDI32                = syscall.NewLazyDLL("gdi32.dll")
+	settingsComctl32             = syscall.NewLazyDLL("comctl32.dll")
+	procSettingsCreateWindowEx   = settingsUser32.NewProc("CreateWindowExW")
+	procSettingsDefWindowProc    = settingsUser32.NewProc("DefWindowProcW")
+	procSettingsDestroyWindow    = settingsUser32.NewProc("DestroyWindow")
+	procSettingsEnableWindow     = settingsUser32.NewProc("EnableWindow")
+	procSettingsGetDPIForWindow  = settingsUser32.NewProc("GetDpiForWindow")
+	procSettingsGetWindowText    = settingsUser32.NewProc("GetWindowTextW")
+	procSettingsGetWindowTextLen = settingsUser32.NewProc("GetWindowTextLengthW")
+	procSettingsLoadCursor       = settingsUser32.NewProc("LoadCursorW")
+	procSettingsRegisterClassEx  = settingsUser32.NewProc("RegisterClassExW")
+	procSettingsSendMessage      = settingsUser32.NewProc("SendMessageW")
+	procSettingsSetFocus         = settingsUser32.NewProc("SetFocus")
+	procSettingsSetForeground    = settingsUser32.NewProc("SetForegroundWindow")
+	procSettingsSetWindowPos     = settingsUser32.NewProc("SetWindowPos")
+	procSettingsSetWindowText    = settingsUser32.NewProc("SetWindowTextW")
+	procSettingsShowWindow       = settingsUser32.NewProc("ShowWindow")
+	procSettingsGetStockObject   = settingsGDI32.NewProc("GetStockObject")
+	procSettingsInitControls     = settingsComctl32.NewProc("InitCommonControlsEx")
 
 	settingsWindowProcedure = syscall.NewCallback(settingsWndProc)
 	settingsWindows         sync.Map
@@ -181,17 +162,6 @@ type settingsNMHDR struct {
 }
 
 type settingsRect struct{ Left, Top, Right, Bottom int32 }
-
-type settingsBrowseInfo struct {
-	Owner       uintptr
-	Root        uintptr
-	DisplayName *uint16
-	Title       *uint16
-	Flags       uint32
-	Callback    uintptr
-	Param       uintptr
-	Image       int32
-}
 
 func (host *windowsTrayHost) openSettings() {
 	if host.settings != nil && host.settings.hwnd != 0 {
@@ -368,12 +338,7 @@ func (state *settingsWindow) createControls() error {
 		for _, option := range availableLanguages {
 			state.addComboString(languageCombo, option.Name)
 		}
-		candidateLabel := must(2306, "STATIC", localize(language, textCandidateMode), 0)
-		candidateCombo := must(settingsIDCandidateMode, "COMBOBOX", "", settingsWSTabStop|settingsCBSDropDownList)
-		for _, label := range []string{"none"} {
-			state.addComboString(candidateCombo, label)
-		}
-		state.general = []uintptr{candidateLabel, candidateCombo, generalGroup, generalLabel, hotkey, clearCapture, pinLabel, pinHotkey, clearPin, generalHelp, languageLabel, languageCombo}
+		state.general = []uintptr{generalGroup, generalLabel, hotkey, clearCapture, pinLabel, pinHotkey, clearPin, generalHelp, languageLabel, languageCombo}
 
 		captureGroup := must(2401, "BUTTON", localize(language, textScrollingMatching), settingsBSGroupBox)
 		modeLabel := must(2407, "STATIC", localize(language, textLongCaptureMode), 0)
@@ -390,14 +355,7 @@ func (state *settingsWindow) createControls() error {
 		confidence := must(settingsIDMinConfidence, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll)
 		stationaryLabel := must(2406, "STATIC", localize(language, textStationaryThreshold), 0)
 		stationary := must(settingsIDStationary, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll)
-		diagnosticGroup := must(2501, "BUTTON", localize(language, textDiagnostics), settingsBSGroupBox)
-		diagnostics := must(settingsIDDiagnostics, "BUTTON", localize(language, textSaveDiagnostics), settingsWSTabStop|settingsBSAutoCheckBox)
-		directoryLabel := must(2502, "STATIC", localize(language, textDirectory), 0)
-		directory := must(settingsIDDiagnosticDir, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll)
-		browse := must(settingsIDBrowse, "BUTTON", localize(language, textBrowse), settingsWSTabStop)
-		limitLabel := must(2503, "STATIC", localize(language, textRejectedFrameLimit), 0)
-		limit := must(settingsIDDiagnosticLimit, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll|settingsESNumber)
-		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary, diagnosticGroup, diagnostics, directoryLabel, directory, browse, limitLabel, limit}
+		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary}
 
 		must(1, "BUTTON", localize(language, textOK), settingsWSTabStop|settingsBSDefaultPushButton)
 		must(2, "BUTTON", localize(language, textCancel), settingsWSTabStop)
@@ -432,7 +390,7 @@ func (state *settingsWindow) layout() {
 		}
 	}
 	move(settingsIDTree, 12, 12, 145, 388)
-	move(2301, 174, 12, 476, 255)
+	move(2301, 174, 12, 476, 160)
 	move(2302, 194, 48, 92, 22)
 	move(settingsIDHotkey, 292, 44, 190, 26)
 	move(settingsIDClearHotkey, 492, 44, 76, 26)
@@ -440,10 +398,8 @@ func (state *settingsWindow) layout() {
 	move(settingsIDPinHotkey, 292, 80, 190, 26)
 	move(settingsIDClearPinHotkey, 492, 80, 76, 26)
 	move(2303, 194, 118, 432, 44)
-	move(2304, 194, 172, 92, 22)
-	move(settingsIDLanguage, 292, 168, 190, 120)
-	move(2306, 194, 215, 120, 22)
-	move(settingsIDCandidateMode, 315, 211, 310, 150)
+	move(2304, 194, 192, 92, 22)
+	move(settingsIDLanguage, 292, 188, 190, 120)
 
 	move(2401, 174, 12, 476, 237)
 	move(2407, 194, 45, 160, 22)
@@ -455,13 +411,6 @@ func (state *settingsWindow) layout() {
 		move(labels[index], 194, y+3, 160, 22)
 		move(edits[index], 365, y, 140, 24)
 	}
-	move(2501, 174, 258, 476, 142)
-	move(settingsIDDiagnostics, 194, 281, 180, 22)
-	move(2502, 194, 313, 52, 22)
-	move(settingsIDDiagnosticDir, 246, 310, 290, 24)
-	move(settingsIDBrowse, 544, 309, 82, 26)
-	move(2503, 194, 347, 168, 22)
-	move(settingsIDDiagnosticLimit, 365, 344, 140, 24)
 
 	move(1, 410, 416, 76, 28)
 	move(2, 492, 416, 76, 28)
@@ -478,7 +427,6 @@ func (state *settingsWindow) load(value preferences) {
 	procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetRules, 0, 0)
 	procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetHotkey, uintptr(hotkeyToControl(pin)), 0)
 	procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBSetCurrent, uintptr(languageIndex(value.General.Language)), 0)
-	procSettingsSendMessage.Call(state.controls[settingsIDCandidateMode], settingsCBSetCurrent, 0, 0)
 	modeIndex := uintptr(0)
 	if value.LongCapture.Mode == longCaptureModeLegacy {
 		modeIndex = 1
@@ -489,14 +437,6 @@ func (state *settingsWindow) load(value preferences) {
 	state.setText(settingsIDMaxDifference, strconv.FormatFloat(value.LongCapture.MaxMeanDifference, 'g', -1, 64))
 	state.setText(settingsIDMinConfidence, strconv.FormatFloat(value.LongCapture.MinimumConfidence, 'g', -1, 64))
 	state.setText(settingsIDStationary, strconv.FormatFloat(value.LongCapture.StationaryThreshold, 'g', -1, 64))
-	checked := uintptr(0)
-	if value.Diagnostics.Enabled {
-		checked = settingsBSTChecked
-	}
-	procSettingsSendMessage.Call(state.controls[settingsIDDiagnostics], settingsBMSetCheck, checked, 0)
-	state.setText(settingsIDDiagnosticDir, value.Diagnostics.Directory)
-	state.setText(settingsIDDiagnosticLimit, strconv.Itoa(value.Diagnostics.Limit))
-	state.updateDiagnosticControls()
 }
 
 func (state *settingsWindow) handleCommand(id int, notification uint32) {
@@ -515,19 +455,7 @@ func (state *settingsWindow) handleCommand(id int, notification uint32) {
 	case settingsIDClearPinHotkey:
 		procSettingsSendMessage.Call(state.controls[settingsIDPinHotkey], settingsHKMSetHotkey, 0, 0)
 		state.setDirty(true)
-	case settingsIDBrowse:
-		if notification == settingsBNClicked {
-			if path, ok := browseSettingsDirectory(state.hwnd); ok {
-				state.setText(settingsIDDiagnosticDir, path)
-				state.setDirty(true)
-			}
-		}
-	case settingsIDDiagnostics:
-		if notification == settingsBNClicked {
-			state.updateDiagnosticControls()
-			state.setDirty(true)
-		}
-	case settingsIDLanguage, settingsIDLongCaptureMode, settingsIDCandidateMode:
+	case settingsIDLanguage, settingsIDLongCaptureMode:
 		if notification == settingsCBNSelectionChange && !state.loading {
 			state.setDirty(true)
 		}
@@ -566,11 +494,6 @@ func (state *settingsWindow) apply() bool {
 
 func (state *settingsWindow) read() (preferences, uintptr, error) {
 	value := state.host.preferences
-	candidateIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDCandidateMode], settingsCBGetCurrent, 0, 0)
-	if candidateIndex != 0 {
-		return value, state.controls[settingsIDCandidateMode], fmt.Errorf("invalid candidate mode")
-	}
-	value.General.CandidateMode = candidateModeNames[candidateIndex]
 	languageIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBGetCurrent, 0, 0)
 	value.General.Language = languageEnglish
 	if int(languageIndex) < len(availableLanguages) {
@@ -639,18 +562,6 @@ func (state *settingsWindow) read() (preferences, uintptr, error) {
 	if value.LongCapture.StationaryThreshold < 0 || value.LongCapture.StationaryThreshold > 255 {
 		return value, state.controls[settingsIDStationary], fmt.Errorf("静止判定阈值必须在 0 到 255 之间")
 	}
-	checked, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDDiagnostics], settingsBMGetCheck, 0, 0)
-	value.Diagnostics.Enabled = checked == settingsBSTChecked
-	value.Diagnostics.Directory = strings.TrimSpace(state.text(settingsIDDiagnosticDir))
-	if value.Diagnostics.Enabled && value.Diagnostics.Directory == "" {
-		return value, state.controls[settingsIDDiagnosticDir], fmt.Errorf("启用诊断时目录不能为空")
-	}
-	if value.Diagnostics.Limit, err = state.readInt(settingsIDDiagnosticLimit); err != nil {
-		return value, state.controls[settingsIDDiagnosticLimit], fmt.Errorf("诊断上限必须是整数")
-	}
-	if value.Diagnostics.Limit < 0 {
-		return value, state.controls[settingsIDDiagnosticLimit], fmt.Errorf("诊断上限不能为负数")
-	}
 	if err := value.Validate(); err != nil {
 		return value, 0, err
 	}
@@ -677,17 +588,6 @@ func (state *settingsWindow) showPage(advanced bool) {
 		}
 		procSettingsShowWindow.Call(hwnd, command)
 	}
-}
-
-func (state *settingsWindow) updateDiagnosticControls() {
-	checked, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDDiagnostics], settingsBMGetCheck, 0, 0)
-	enabled := uintptr(0)
-	if checked == settingsBSTChecked {
-		enabled = 1
-	}
-	procSettingsEnableWindow.Call(state.controls[settingsIDDiagnosticDir], enabled)
-	procSettingsEnableWindow.Call(state.controls[settingsIDBrowse], enabled)
-	procSettingsEnableWindow.Call(state.controls[settingsIDDiagnosticLimit], enabled)
 }
 
 func (state *settingsWindow) setDirty(dirty bool) {
@@ -752,30 +652,6 @@ func hotkeyFromControl(value uint16) configuredHotkey {
 		result.Modifiers |= hotkeyModifierAlt
 	}
 	return result
-}
-
-func browseSettingsDirectory(owner uintptr) (string, bool) {
-	result, _, _ := procSettingsCoInitializeEx.Call(0, 0x00000002|0x00000004)
-	if int32(result) >= 0 {
-		defer procSettingsCoUninitialize.Call()
-	}
-	display := make([]uint16, 260)
-	title, _ := syscall.UTF16PtrFromString(localize(uiLanguage(), textSelectDiagnosticsDirectory))
-	info := settingsBrowseInfo{
-		Owner: owner, DisplayName: &display[0], Title: title,
-		Flags: settingsBIFReturnOnlyFSDirs | settingsBIFNewDialogStyle,
-	}
-	item, _, _ := procSettingsBrowseForFolder.Call(uintptr(unsafe.Pointer(&info)))
-	if item == 0 {
-		return "", false
-	}
-	defer procSettingsCoTaskMemFree.Call(item)
-	path := make([]uint16, 32768)
-	ok, _, _ := procSettingsGetPathFromIDList.Call(item, uintptr(unsafe.Pointer(&path[0])))
-	if ok == 0 {
-		return "", false
-	}
-	return syscall.UTF16ToString(path), true
 }
 
 var (

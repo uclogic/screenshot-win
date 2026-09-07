@@ -37,8 +37,6 @@ type Config struct {
 	Width, Height             int
 	Interval                  time.Duration
 	MatchOptions              screenshotwin.MatchOptions
-	DiagnosticDir             string
-	DiagnosticMax             int
 	CandidateMode             selector.CandidateMode
 	LongCaptureImplementation LongCaptureImplementation
 }
@@ -46,9 +44,6 @@ type Config struct {
 func (config Config) Validate() error {
 	if config.Interval <= 0 {
 		return fmt.Errorf("interval must be positive")
-	}
-	if config.DiagnosticMax < 0 {
-		return fmt.Errorf("diagnostic limit must not be negative")
 	}
 	if !config.CandidateMode.Valid() {
 		return fmt.Errorf("unknown candidate mode %d", config.CandidateMode)

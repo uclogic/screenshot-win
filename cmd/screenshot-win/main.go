@@ -6,7 +6,6 @@ import (
 	"image"
 	"image/png"
 	"os"
-	"path/filepath"
 	application "screenshot-win/app"
 	"screenshot-win/capture"
 	"screenshot-win/selector"
@@ -23,10 +22,9 @@ type candidateDebugOptions struct {
 	Output string
 }
 type launchOptions struct {
-	Config           application.Config
-	Preferences      preferences
-	ProgramDirectory string
-	Debug            *candidateDebugOptions
+	Config      application.Config
+	Preferences preferences
+	Debug       *candidateDebugOptions
 }
 
 func main() {
@@ -81,8 +79,7 @@ func run(arguments []string) error {
 	saved, settingsErr := loadPreferences(settingsPath)
 	setUILanguage(saved.General.Language)
 	options.Preferences = saved
-	options.ProgramDirectory = filepath.Dir(executable)
-	options.Config = saved.apply(application.Config{}, options.ProgramDirectory)
+	options.Config = saved.apply(application.Config{})
 	if err := options.Config.Validate(); err != nil {
 		return err
 	}

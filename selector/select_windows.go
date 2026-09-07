@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"os"
 	"runtime"
 	"syscall"
 	"time"
@@ -36,12 +37,14 @@ const (
 	wmClose       = 0x0010
 	wmNCHitTest   = 0x0084
 	wmKeyDown     = 0x0100
+	wmKeyUp       = 0x0101
 	wmMouseMove   = 0x0200
 	wmLButtonDown = 0x0201
 	wmLButtonUp   = 0x0202
 	wmRButtonDown = 0x0204
 
 	vkEscape      = 0x1B
+	vkTab         = 0x09
 	idcCross      = 32515
 	htTransparent = ^uintptr(0)
 
@@ -91,13 +94,16 @@ var (
 )
 
 type selectionState struct {
-	snapshot      image.Image
-	candidateMode bool
-	beforeClose   func(image.Rectangle) error
-	candidates    []image.Rectangle
-	candidate     image.Rectangle
-	gesture       candidateGesture
-	detected      <-chan []image.Rectangle
+	candidateStarted  time.Time
+	snapshot          image.Image
+	candidateRenderer *frozenCandidateRenderer
+	candidateMode     bool
+	beforeClose       func(image.Rectangle) error
+	candidates        []image.Rectangle
+	candidate         image.Rectangle
+	candidateExtent   candidateExtent
+	gesture           candidateGesture
+	detected          <-chan []image.Rectangle
 
 	hwnd      uintptr
 	desktop   image.Rectangle
@@ -188,6 +194,9 @@ func SelectWithOptions(ctx context.Context, options SelectionOptions) (result im
 		return image.Rectangle{}, false, fmt.Errorf("invalid candidate mode")
 	}
 	state.candidateMode = options.Mode == CandidateMinimalRectangle
+	if state.candidateMode {
+		state.candidateStarted = time.Now()
+	}
 	state.beforeClose = options.BeforeClose
 	if options.Snapshot != nil || state.candidateMode {
 		if options.Snapshot == nil || options.Desktop != desktop || options.Snapshot.Bounds().Size() != desktop.Size() {
@@ -273,6 +282,9 @@ func SelectWithOptions(ctx context.Context, options SelectionOptions) (result im
 	procShowWindow.Call(hwnd, swShow)
 	procSetForegroundWindow.Call(hwnd)
 	procSetFocus.Call(hwnd)
+	if state.candidateMode {
+		fmt.Fprintf(os.Stderr, "[minimal-rectangle] overlay shown elapsed=%s\n", time.Since(state.candidateStarted))
+	}
 
 	var msg message
 	for {
@@ -326,12 +338,15 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 		if state.snapshot != nil && wParam == 2 {
 			select {
 			case rectangles := <-state.detected:
+				fmt.Fprintf(os.Stderr, "[minimal-rectangle] results received elapsed=%s candidates=%d\n", time.Since(state.candidateStarted), len(rectangles))
 				state.candidates = rectangles
 				state.detected = nil
 				procFrozenKillTimer.Call(hwnd, 2)
-				if !state.gesture.pressed && state.refreshCandidate() {
+				changed := !state.gesture.pressed && state.refreshCandidate()
+				if changed {
 					state.renderOrClose()
 				}
+				fmt.Fprintf(os.Stderr, "[minimal-rectangle] results applied elapsed=%s rendered=%t deferred=%t rectangle=%v error=%v\n", time.Since(state.candidateStarted), changed, state.gesture.pressed, state.candidate, state.renderErr)
 			default:
 			}
 			return 0
@@ -397,8 +412,26 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case wmKeyDown:
+		if wParam == vkTab && state.candidateMode {
+			if !state.gesture.pressed {
+				changed := state.refreshCandidate()
+				state.candidateExtent.down(state.candidateExtent.current)
+				if state.refreshCandidate() || changed {
+					state.renderOrClose()
+				}
+			}
+			return 0
+		}
 		if wParam == vkEscape {
 			procDestroyWindow.Call(hwnd)
+			return 0
+		}
+	case wmKeyUp:
+		if wParam == vkTab && state.candidateMode {
+			if !state.gesture.pressed && state.refreshCandidate() {
+				state.renderOrClose()
+			}
+			state.candidateExtent.held = false
 			return 0
 		}
 	case wmDestroy:
@@ -478,7 +511,7 @@ func (state *selectionState) renderOrClose() {
 func (state *selectionState) render() error {
 	selection := dragRectangle(state.client, state.anchor, state.current)
 	if state.snapshot != nil && !state.candidateMode {
-		drawFrozenCandidate(state.pixels, state.snapshot, selection)
+		state.drawCandidate(selection)
 		return state.present()
 	}
 	if state.candidateMode {
@@ -489,11 +522,25 @@ func (state *selectionState) render() error {
 				selection = dragRectangle(state.client, state.gesture.anchor, state.gesture.current)
 			}
 		}
-		drawFrozenCandidate(state.pixels, state.snapshot, selection)
-		return state.present()
+		started := time.Now()
+		state.drawCandidate(selection)
+		drawTime := time.Since(started)
+		presentStarted := time.Now()
+		err := state.present()
+		if time.Since(started) >= 16*time.Millisecond {
+			fmt.Fprintf(os.Stderr, "[minimal-rectangle] slow render rectangle=%v draw=%s present=%s total=%s elapsed=%s error=%v\n", selection, drawTime, time.Since(presentStarted), time.Since(started), time.Since(state.candidateStarted), err)
+		}
+		return err
 	}
 	drawSelectionOverlay(state.pixels, state.client.Dx(), selection, state.dragging)
 	return state.present()
+}
+
+func (state *selectionState) drawCandidate(selection image.Rectangle) {
+	if state.candidateRenderer == nil {
+		state.candidateRenderer = newFrozenCandidateRenderer(state.snapshot)
+	}
+	state.candidateRenderer.draw(state.pixels, selection)
 }
 
 func (state *selectionState) present() error {

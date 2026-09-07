@@ -25,11 +25,10 @@ func TestRunnerRunContextRejectsCancelledContextWithoutStartingSession(t *testin
 
 func validConfig() Config {
 	return Config{
-		Width:         800,
-		Height:        600,
-		Interval:      100 * time.Millisecond,
-		MatchOptions:  screenshotwin.DefaultMatchOptions(),
-		DiagnosticMax: 50,
+		Width:        800,
+		Height:       600,
+		Interval:     100 * time.Millisecond,
+		MatchOptions: screenshotwin.DefaultMatchOptions(),
 	}
 }
 
@@ -48,7 +47,6 @@ func TestConfigValidate(t *testing.T) {
 func TestConfigValidateRejectsUnsafeRuntimeValues(t *testing.T) {
 	tests := []Config{
 		func() Config { config := validConfig(); config.Interval = 0; return config }(),
-		func() Config { config := validConfig(); config.DiagnosticMax = -1; return config }(),
 		func() Config { config := validConfig(); config.CandidateMode = 99; return config }(),
 		func() Config { config := validConfig(); config.LongCaptureImplementation = 99; return config }(),
 	}

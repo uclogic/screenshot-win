@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestCandidatePreferences(t *testing.T) {
 		if err != nil || got.General.CandidateMode != mode {
 			t.Fatalf("%+v %v", got, err)
 		}
-		if got.apply(application.Config{}, "").CandidateMode != selector.CandidateMode(i) {
+		if got.apply(application.Config{}).CandidateMode != selector.CandidateMode(i) {
 			t.Fatal("mode not applied")
 		}
 	}
@@ -48,7 +49,7 @@ func TestDefaultPreferencesAreValid(t *testing.T) {
 	if err := value.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if value.General.Hotkey != "Alt+Shift+A" || value.General.Language != languageEnglish || value.LongCapture.Mode != longCaptureModeLegacy || value.LongCapture.IntervalMS != 100 || value.Diagnostics.Limit != 50 {
+	if value.General.Hotkey != "Alt+Shift+A" || value.General.Language != languageEnglish || value.LongCapture.Mode != longCaptureModeLegacy || value.LongCapture.IntervalMS != 100 {
 		t.Fatalf("unexpected defaults: %+v", value)
 	}
 }
@@ -61,9 +62,6 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	want.LongCapture.IntervalMS = 225
 	want.LongCapture.Mode = longCaptureModeBidirectional
 	want.LongCapture.MaxScrollRatio = 0.7
-	want.Diagnostics.Enabled = true
-	want.Diagnostics.Directory = "debug-data"
-	want.Diagnostics.Limit = 12
 	if err := savePreferences(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +98,7 @@ func TestLoadPreferencesMergesMissingFieldsWithDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := defaultPreferences()
-	if got.LongCapture.IntervalMS != 250 || got.LongCapture.Mode != longCaptureModeLegacy || got.General != want.General || got.LongCapture.MaxScrollRatio != want.LongCapture.MaxScrollRatio || got.Diagnostics != want.Diagnostics {
+	if got.LongCapture.IntervalMS != 250 || got.LongCapture.Mode != longCaptureModeLegacy || got.General != want.General || got.LongCapture.MaxScrollRatio != want.LongCapture.MaxScrollRatio {
 		t.Fatalf("partial settings did not retain defaults: %+v", got)
 	}
 }
@@ -126,13 +124,6 @@ func TestPreferencesValidateRejectsInvalidValues(t *testing.T) {
 		func() preferences { value := defaultPreferences(); value.LongCapture.IntervalMS = 0; return value }(),
 		func() preferences { value := defaultPreferences(); value.LongCapture.Mode = "unknown"; return value }(),
 		func() preferences { value := defaultPreferences(); value.LongCapture.MaxScrollRatio = 1; return value }(),
-		func() preferences {
-			value := defaultPreferences()
-			value.Diagnostics.Enabled = true
-			value.Diagnostics.Directory = ""
-			return value
-		}(),
-		func() preferences { value := defaultPreferences(); value.Diagnostics.Limit = -1; return value }(),
 	}
 	for _, value := range tests {
 		if err := value.Validate(); err == nil {
@@ -156,23 +147,18 @@ func TestConfiguredHotkeyParsingAndFormatting(t *testing.T) {
 	}
 }
 
-func TestPreferencesApplyResolvesDiagnosticDirectory(t *testing.T) {
+func TestPreferencesApplyCaptureSettings(t *testing.T) {
 	value := defaultPreferences()
 	value.LongCapture.IntervalMS = 275
 	value.LongCapture.Mode = longCaptureModeLegacy
-	value.Diagnostics.Enabled = true
-	value.Diagnostics.Directory = "diagnostics"
-	config := value.apply(application.Config{}, filepath.Join("root", "app"))
-	if config.Interval != 275*time.Millisecond || config.DiagnosticDir != filepath.Join("root", "app", "diagnostics") {
+	config := value.apply(application.Config{})
+	if config.Interval != 275*time.Millisecond {
 		t.Fatalf("applied config = %+v", config)
 	}
 	if config.LongCaptureImplementation != application.LongCaptureLegacy {
 		t.Fatalf("long capture implementation = %v, want legacy", config.LongCaptureImplementation)
 	}
-	value.Diagnostics.Enabled = false
-	if got := value.apply(config, "ignored").DiagnosticDir; got != "" {
-		t.Fatalf("disabled diagnostic directory = %q", got)
-	}
+
 }
 
 func TestSettingsPathUsesExecutableDirectory(t *testing.T) {
@@ -294,5 +280,30 @@ func TestCaptureHotkeyCanBeDisabled(t *testing.T) {
 	key, _ := parseConfiguredHotkey(loaded.General.PinHotkey)
 	if action, ok := bindings[key]; len(bindings) != 1 || !ok || action != hotkeyPin {
 		t.Fatalf("pin shortcut unavailable with capture disabled: %v", bindings)
+	}
+}
+
+func TestPreferencesIgnoreRemovedDiagnostics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	data := "[general]\nlanguage = 'zh-CN'\n[diagnostics]\nenabled = true\ndirectory = ''\nlimit = -1\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	value, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.General.Language != languageChinese {
+		t.Fatalf("language = %q", value.General.Language)
+	}
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "diagnostics") {
+		t.Fatalf("saved removed settings: %s", saved)
 	}
 }

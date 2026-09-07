@@ -13,7 +13,6 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 - Run from the Windows notification area
 - Configure the global capture shortcut and scrolling matcher from a native Windows settings dialog
 - Capture multi-monitor desktops using physical pixel coordinates
-- Collect diagnostic data for rejected scrolling frames
 
 ## Requirements
 
@@ -85,7 +84,7 @@ Double-click `screenshot-win.exe` to start screenshot-win in the Windows notific
 
 ### Settings
 
-Settings are stored beside the executable in `screenshot-win.toml`. Relative diagnostic paths are resolved from that directory. If the executable directory is not writable, saving reports an error and keeps the unsaved values in the dialog. A missing file uses built-in defaults; an invalid file produces a warning and the application continues with defaults.
+Settings are stored beside the executable in `screenshot-win.toml`. If the executable directory is not writable, saving reports an error and keeps the unsaved values in the dialog. A missing file uses built-in defaults; an invalid file produces a warning and the application continues with defaults.
 
 Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, and `Shift` plus one key (for example `Ctrl+A`, `Alt+A`, `Shift+A`, or `Ctrl+Alt+Shift+A`), or a standalone `F1`–`F11`. F12 is reserved by Windows and is rejected. Bare letters/digits and modifier-only shortcuts are not accepted. The two actions must use different shortcuts; conflicts with other applications are reported when applying settings. Shortcuts are temporarily released while a shortcut field has focus so you can record an existing binding.
 
@@ -109,16 +108,11 @@ max_scroll_ratio = 0.5
 max_mean_difference = 8.0
 minimum_confidence = 0.25
 stationary_threshold = 0.5
-
-[diagnostics]
-enabled = false
-directory = 'diagnostics'
-limit = 50
 ```
 
 ### Automatic candidate rectangles
 
-In Settings → General, choose a candidate mode:
+Set `general.candidate_mode` in `screenshot-win.toml` to choose a candidate mode:
 
 - `none` (default): manual selection.
 - `windows ui interface`: reserved, not implemented; currently behaves like none.
@@ -140,7 +134,9 @@ The four numbers specify x, y, width, and height in physical virtual-desktop pix
 
 This captures the specified area once and outlines every detected rectangle of at least 100×80 pixels in blue. It uses the same detector as interactive selection, without pointer filtering or monitor fallback. With no candidates, it saves the unmarked screenshot. The PNG retains the requested dimensions; an existing output file is overwritten. The command prints the rectangle count and output path, then exits. Capture, argument, and file errors produce a nonzero exit code.
 
-Normal launch takes no arguments and starts the tray host. The former coordinate scrolling-capture command and all previous command-line options have been removed. Configure scrolling and diagnostics through Settings or `screenshot-win.toml`.
+Minimal-rectangle detection prints `[minimal-rectangle]` timings to stderr: edge detection, horizontal/vertical line extraction, rectangle combination, sorting, deduplication, and total time, plus candidate counts. Launch from a terminal to see them. Interactive selection also reports overlay startup, result receipt/application, and drawing/presentation for renders taking at least 16 ms. Elapsed overlay times start when the selector initializes (after screenshot capture); presentation measures the Windows API call, not physical screen refresh.
+
+Normal launch takes no arguments and starts the tray host. The former coordinate scrolling-capture command and all previous command-line options have been removed. Configure scrolling through Settings or `screenshot-win.toml`.
 
 ## Project layout
 
@@ -159,3 +155,5 @@ bidirectional.go      Bidirectional matcher, page anchors, and image builder
 ## Releases
 
 The repository includes a manually triggered GitHub Actions workflow that tests the project, cross-compiles the Windows amd64 executable on Ubuntu, packages it, generates a SHA-256 checksum, and creates a GitHub release.
+
+When automatic region suggestions are enabled, hold **Tab** to anchor the pointer position, then move the mouse to highlight the smallest candidate rectangle containing both positions. Release **Tab** to keep that choice while moving inside it, then click to confirm. Moving outside the highlighted rectangle resumes normal hover selection. Dragging with the left mouse button still selects a manual area.

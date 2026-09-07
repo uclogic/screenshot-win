@@ -12,16 +12,15 @@ import (
 )
 
 type runStats struct {
-	captured       int
-	analyzed       int
-	matched        int
-	appended       int
-	addedTop       int
-	addedBottom    int
-	revisited      int
-	relocalized    int
-	rejected       map[screenshotwin.RejectionReason]int
-	diagnosticDrop int
+	captured    int
+	analyzed    int
+	matched     int
+	appended    int
+	addedTop    int
+	addedBottom int
+	revisited   int
+	relocalized int
+	rejected    map[screenshotwin.RejectionReason]int
 }
 
 type longCapturePreview interface {
@@ -64,19 +63,12 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, session
 		}
 	}()
 
-	diagnostics, diagnosticErr := newDiagnosticWriter(config.DiagnosticDir, config.DiagnosticMax)
-	if diagnosticErr != nil {
-		fmt.Fprintf(runner.runtime.Stderr, "警告：诊断已停用：%v\n", diagnosticErr)
-	}
-
 	previous, err := capture.Region(config.X, config.Y, config.Width, config.Height)
 	if err != nil {
-		closeDiagnostics(diagnostics)
 		return err
 	}
 	engine, err := newLongCaptureEngine(config.LongCaptureImplementation, previous, config.MatchOptions)
 	if err != nil {
-		closeDiagnostics(diagnostics)
 		return err
 	}
 	var preview longCapturePreview
@@ -145,7 +137,6 @@ captureLoop:
 				return runner.choosePNGPath(ctx, owner, now)
 			})
 			if actionErr != nil {
-				closeDiagnostics(diagnostics)
 				return actionErr
 			}
 			if !decision.finish {
@@ -173,7 +164,7 @@ captureLoop:
 			finishAction = decision.action
 			finishPath = decision.path
 			break captureLoop
-		case capturedAt := <-ticker.C:
+		case <-ticker.C:
 			if capture.EscapePressed() {
 				break captureLoop
 			}
@@ -181,25 +172,14 @@ captureLoop:
 				return capture.Region(config.X, config.Y, config.Width, config.Height)
 			}, preview, captureToolbar)
 			if captureErr != nil {
-				closeDiagnostics(diagnostics)
 				return captureErr
 			}
 			stats.captured++
 			result, analyzeErr := engine.Add(current)
 			if analyzeErr != nil {
-				closeDiagnostics(diagnostics)
 				return analyzeErr
 			}
 			stats.analyzed++
-
-			if diagnostics != nil {
-				if submitErr := diagnostics.submit(stats.analyzed, capturedAt, config.LongCaptureImplementation, result, previous, current); submitErr != nil {
-					fmt.Fprintf(runner.runtime.Stderr, "警告：诊断已停用：%v\n", submitErr)
-					stats.diagnosticDrop += diagnostics.droppedCount()
-					diagnostics.close()
-					diagnostics = nil
-				}
-			}
 
 			if !result.matched {
 				stats.rejected[result.reason]++
@@ -213,7 +193,6 @@ captureLoop:
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图已停用：%v\n", previewErr)
 				}
 			}
-			previous = current
 			stats.matched++
 			stats.appended += newRows
 			stats.addedTop += result.addedTop
@@ -246,12 +225,6 @@ captureLoop:
 		shield = nil
 	}
 
-	if diagnostics != nil {
-		stats.diagnosticDrop += diagnostics.droppedCount()
-		if closeErr := diagnostics.close(); closeErr != nil {
-			fmt.Fprintf(runner.runtime.Stderr, "警告：诊断写入不完整：%v\n", closeErr)
-		}
-	}
 	if finishAction == selector.ActionCancel {
 		fmt.Fprintln(runner.runtime.Stdout, "已取消长截图，不会创建输出文件。")
 		return nil
@@ -341,12 +314,6 @@ func refreshLongCapturePreview(preview longCapturePreview, source image.Image) (
 	return preview, nil
 }
 
-func closeDiagnostics(diagnostics *diagnosticWriter) {
-	if diagnostics != nil {
-		diagnostics.close()
-	}
-}
-
 func (runner *Runner) printSummary(stats runStats, output image.Image, outputPath string) {
 	fmt.Fprintf(runner.runtime.Stdout, "已保存 %s（%d × %d）\n", outputPath, output.Bounds().Dx(), output.Bounds().Dy())
 	runner.printRunStats(stats)
@@ -364,9 +331,6 @@ func (runner *Runner) printRunStats(stats runStats) {
 		stats.rejected[screenshotwin.RejectionAmbiguous],
 		otherRejections(stats.rejected),
 	)
-	if stats.diagnosticDrop > 0 {
-		fmt.Fprintf(runner.runtime.Stdout, "诊断队列丢弃 %d 条记录\n", stats.diagnosticDrop)
-	}
 }
 
 func otherRejections(rejected map[screenshotwin.RejectionReason]int) int {

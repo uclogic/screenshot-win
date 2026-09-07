@@ -135,7 +135,6 @@ type windowsTrayHost struct {
 	shutdownStarted         bool
 	settings                *settingsWindow
 	settingsPath            string
-	programDirectory        string
 	preferences             preferences
 	configMu                sync.RWMutex
 	config                  application.Config
@@ -160,7 +159,7 @@ func runTrayHost(runner *application.Runner, options launchOptions, settingsPath
 	}
 
 	host := &windowsTrayHost{
-		settingsPath: settingsPath, programDirectory: options.ProgramDirectory,
+		settingsPath:   settingsPath,
 		preferences:    options.Preferences,
 		config:         options.Config,
 		startupWarning: settingsErr, pinClipboard: runner.PinClipboard,
@@ -451,7 +450,7 @@ func (host *windowsTrayHost) applyPreferences(value preferences) error {
 	host.preferences = value
 	setUILanguage(value.General.Language)
 	host.configMu.Lock()
-	host.config = value.apply(host.config, host.programDirectory)
+	host.config = value.apply(host.config)
 	host.configMu.Unlock()
 	host.refreshIconTip()
 	return nil

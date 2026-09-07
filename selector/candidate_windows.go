@@ -13,7 +13,7 @@ func (state *selectionState) refreshCandidate() bool {
 		return false
 	}
 	p := image.Pt(int(cursor.X), int(cursor.Y))
-	r, ok := SmallestRectangleAt(state.candidates, p.Sub(state.desktop.Min))
+	r, ok := state.candidateExtent.at(state.candidates, p.Sub(state.desktop.Min))
 	if !ok {
 		area := rect{cursor.X, cursor.Y, cursor.X + 1, cursor.Y + 1}
 		monitor, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&area)), monitorDefaultToNearest)
@@ -24,7 +24,12 @@ func (state *selectionState) refreshCandidate() bool {
 			}
 		}
 	}
+	// A monitor fallback must also contain the entire indicated area.
+	if state.candidateExtent.active && (!state.candidateExtent.anchor.In(r) || !state.candidateExtent.current.In(r)) {
+		r = state.client
+	}
 	changed := r != state.candidate
 	state.candidate = r
+	state.candidateExtent.chosen = r
 	return changed
 }
