@@ -153,14 +153,17 @@ func pinScaleForSize(original, current image.Point) float64 {
 }
 
 // pinZoomBounds keeps the image point beneath cursor fixed on screen.
-func pinZoomBounds(bounds image.Rectangle, original image.Point, cursor image.Point, wheelDelta int) (image.Rectangle, float64) {
+func pinZoomBounds(bounds image.Rectangle, original image.Point, cursor image.Point, oldScale float64, wheelDelta int) (image.Rectangle, float64) {
 	if bounds.Empty() || original.X <= 0 || original.Y <= 0 || wheelDelta == 0 {
-		return bounds, pinScaleForSize(original, bounds.Size())
+		return bounds, oldScale
 	}
-	oldScale := pinScaleForSize(original, bounds.Size())
 	steps := float64(wheelDelta) / 120
 	minimumScale := math.Min(pinMinimumScale, oldScale)
 	newScale := math.Max(minimumScale, math.Min(pinMaximumScale, oldScale*math.Pow(pinZoomStep, steps)))
+	// Remove floating-point drift when inverse wheel steps return to 100%.
+	if math.Abs(newScale-1) < 1e-10 {
+		newScale = 1
+	}
 	newSize := scaledPinSize(original, newScale)
 	rx := float64(cursor.X-bounds.Min.X) / float64(bounds.Dx())
 	ry := float64(cursor.Y-bounds.Min.Y) / float64(bounds.Dy())

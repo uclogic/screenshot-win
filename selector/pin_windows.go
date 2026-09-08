@@ -16,6 +16,8 @@ const (
 	wmContextMenu      = 0x007B
 	wmMouseWheel       = 0x020A
 	wmRButtonUp        = 0x0205
+	wmNCRButtonDown    = 0x00A4
+	wmNCRButtonUp      = 0x00A5
 	htCaption          = 2
 	mfString           = 0
 	tpmRightButton     = 0x0002
@@ -36,6 +38,7 @@ var (
 	procPinSetStretchMode  = gdi32.NewProc("SetStretchBltMode")
 	procPinStretchDIBits   = gdi32.NewProc("StretchDIBits")
 	procPinGetClipBox      = gdi32.NewProc("GetClipBox")
+	procPinRectVisible     = gdi32.NewProc("RectVisible")
 	procPinGetClientRect   = user32.NewProc("GetClientRect")
 	procPinUpdateWindow    = user32.NewProc("UpdateWindow")
 	pinProcedure           = syscall.NewCallback(pinWindowProcedure)
@@ -52,12 +55,14 @@ type pinStart struct {
 }
 
 type pinWindowState struct {
-	hwnd       uintptr
-	original   image.Point
-	pixels     []byte
-	bitmapInfo bitmapInfo
-	renderErr  error
-	vector     interface {
+	hwnd           uintptr
+	original       image.Point
+	scale          float64
+	pixels         []byte
+	bitmapInfo     bitmapInfo
+	renderErr      error
+	softwareRaster bool
+	vector         interface {
 		DrawToDC(uintptr, image.Point) error
 	}
 }
@@ -118,7 +123,7 @@ func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinS
 		return
 	}
 	bounds := pinInitialBounds(original, origin, workArea)
-	state := &pinWindowState{original: original}
+	state := &pinWindowState{original: original, scale: pinScaleForSize(original, bounds.Size())}
 	state.vector, _ = source.(interface {
 		DrawToDC(uintptr, image.Point) error
 	})
@@ -174,11 +179,16 @@ func pinWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) ui
 		if ok {
 			delta := int(int16((wParam >> 16) & 0xffff))
 			cursor := image.Pt(int(int16(lParam&0xffff)), int(int16((lParam>>16)&0xffff)))
-			zoomed, _ := pinZoomBounds(bounds, state.original, cursor, delta)
+			zoomed, scale := pinZoomBounds(bounds, state.original, cursor, state.scale, delta)
+			state.scale = scale
 			pinMoveWindow(hwnd, zoomed)
 		}
 		return 0
-	case wmContextMenu, wmRButtonUp:
+	case wmNCRButtonDown:
+		// The entire pin reports HTCAPTION for dragging. Handle right clicks
+		// ourselves rather than entering default nonclient menu handling.
+		return 0
+	case wmContextMenu, wmRButtonUp, wmNCRButtonUp:
 		state.showContextMenu(hwnd)
 		return 0
 	case wmKeyDown:
@@ -224,8 +234,9 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 		return
 	}
 	defer procPinDestroyMenu.Call(menu)
-	originalText, _ := syscall.UTF16PtrFromString("原始大小")
-	closeText, _ := syscall.UTF16PtrFromString("关闭")
+	labels := pinMenuLabels()
+	originalText, _ := syscall.UTF16PtrFromString(labels.OriginalSize)
+	closeText, _ := syscall.UTF16PtrFromString(labels.Close)
 	procPinAppendMenu.Call(menu, mfString, pinCommandOriginal, uintptr(unsafe.Pointer(originalText)))
 	procPinAppendMenu.Call(menu, mfString, pinCommandClose, uintptr(unsafe.Pointer(closeText)))
 	var cursor point
@@ -235,6 +246,7 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 	switch command {
 	case pinCommandOriginal:
 		if bounds, ok := pinWindowBounds(hwnd); ok {
+			state.scale = 1
 			pinMoveWindow(hwnd, pinResetBounds(bounds, state.original))
 		}
 	case pinCommandClose:
@@ -266,11 +278,35 @@ func (state *pinWindowState) paint(hwnd uintptr) error {
 	if state.vector != nil {
 		return state.vector.DrawToDC(dc, image.Pt(int(client.Right-client.Left), int(client.Bottom-client.Top)))
 	}
-	return drawPinWithFallback(func(mode uintptr) int32 {
-		procPinSetStretchMode.Call(dc, mode)
-		result, _, _ := procPinStretchDIBits.Call(dc, 0, 0, uintptr(client.Right-client.Left), uintptr(client.Bottom-client.Top), 0, 0,
-			uintptr(state.original.X), uintptr(state.original.Y), uintptr(unsafe.Pointer(&state.pixels[0])), uintptr(unsafe.Pointer(&state.bitmapInfo)), dibRGBColors, rasterSourceCopy)
-		return int32(result)
+	if !state.softwareRaster {
+		err := drawPinWithFallback(func(mode uintptr) int32 {
+			procPinSetStretchMode.Call(dc, mode)
+			result, _, _ := procPinStretchDIBits.Call(dc, 0, 0, uintptr(client.Right-client.Left), uintptr(client.Bottom-client.Top), 0, 0,
+				uintptr(state.original.X), uintptr(state.original.Y), uintptr(unsafe.Pointer(&state.pixels[0])), uintptr(unsafe.Pointer(&state.bitmapInfo)), dibRGBColors, rasterSourceCopy)
+			return int32(result)
+		})
+		if err == nil {
+			return nil
+		}
+		state.softwareRaster = true
+	}
+	size := image.Pt(int(client.Right-client.Left), int(client.Bottom-client.Top))
+	visible := image.Rect(int(clip.Left), int(clip.Top), int(clip.Right), int(clip.Bottom))
+	procPinSetStretchMode.Call(dc, 3 /* COLORONCOLOR */)
+	return drawPinRasterTiles(state.pixels, state.original, size, visible, func(tile image.Rectangle, pixels []byte) error {
+		area := rect{Left: int32(tile.Min.X), Top: int32(tile.Min.Y), Right: int32(tile.Max.X), Bottom: int32(tile.Max.Y)}
+		// A complex clipping region may have holes inside its bounding box.
+		if ok, _, _ := procPinRectVisible.Call(dc, uintptr(unsafe.Pointer(&area))); ok == 0 {
+			return nil
+		}
+		info := bitmapInfo{Header: bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(tile.Dx()), Height: -int32(tile.Dy()), Planes: 1, BitCount: 32, Compression: biRGB, SizeImage: uint32(len(pixels))}}
+		result, _, _ := procPinStretchDIBits.Call(dc, uintptr(tile.Min.X), uintptr(tile.Min.Y), uintptr(tile.Dx()), uintptr(tile.Dy()), 0, 0,
+			uintptr(tile.Dx()), uintptr(tile.Dy()), uintptr(unsafe.Pointer(&pixels[0])), uintptr(unsafe.Pointer(&info)), dibRGBColors, rasterSourceCopy)
+		runtime.KeepAlive(pixels)
+		if int32(result) == 0 || int32(result) == -1 {
+			return fmt.Errorf("StretchDIBits failed to draw pinned image tile %v (source %v, client %v)", tile, state.original, size)
+		}
+		return nil
 	})
 }
 
