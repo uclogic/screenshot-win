@@ -20,6 +20,16 @@ type Frozen struct {
 	updateStyle func(context.Context, editor.StyleChange) (bool, error)
 	styles      <-chan editor.Style
 	rendered    func() image.Image
+	background  ToolbarBackground
+}
+
+// Background copies the visible frozen surface on its window thread. It does
+// not include toolbars and never exposes the editable surface's pixel storage.
+func (frozen *Frozen) Background(bounds image.Rectangle) image.Image {
+	if frozen == nil || frozen.background == nil {
+		return nil
+	}
+	return frozen.background(bounds)
 }
 
 func (frozen *Frozen) WindowHandle() uintptr {

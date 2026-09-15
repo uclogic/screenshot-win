@@ -11,11 +11,11 @@ func ShowToolbar(image.Rectangle) (Action, error) {
 	return ActionCancel, errUnsupported
 }
 
-func ShowToolbarContext(context.Context, image.Rectangle, uintptr) (*ActionToolbar, error) {
+func ShowToolbarContext(context.Context, image.Rectangle, uintptr, ...ToolbarBackground) (*ActionToolbar, error) {
 	return nil, errUnsupported
 }
 
-func ShowAnnotationToolbarContext(context.Context, image.Rectangle, uintptr) (*ActionToolbar, error) {
+func ShowAnnotationToolbarContext(context.Context, image.Rectangle, uintptr, ...ToolbarBackground) (*ActionToolbar, error) {
 	return nil, errUnsupported
 }
 

@@ -33,15 +33,18 @@ const (
 	swHide           = 0
 	swShowNoActivate = 4
 
-	wmDestroy     = 0x0002
-	wmClose       = 0x0010
-	wmNCHitTest   = 0x0084
-	wmKeyDown     = 0x0100
-	wmKeyUp       = 0x0101
-	wmMouseMove   = 0x0200
-	wmLButtonDown = 0x0201
-	wmLButtonUp   = 0x0202
-	wmRButtonDown = 0x0204
+	wmSelectionReady = wmUser + 105
+	wmCaptureChanged = 0x0215
+	wmCancelMode     = 0x001F
+	wmDestroy        = 0x0002
+	wmClose          = 0x0010
+	wmNCHitTest      = 0x0084
+	wmKeyDown        = 0x0100
+	wmKeyUp          = 0x0101
+	wmMouseMove      = 0x0200
+	wmLButtonDown    = 0x0201
+	wmLButtonUp      = 0x0202
+	wmRButtonDown    = 0x0204
 
 	vkEscape      = 0x1B
 	vkTab         = 0x09
@@ -99,6 +102,7 @@ type selectionState struct {
 	candidateRenderer *frozenCandidateRenderer
 	candidateMode     bool
 	beforeClose       func(image.Rectangle) error
+	handoff           selectionHandoff
 	candidates        []image.Rectangle
 	candidate         image.Rectangle
 	candidateExtent   candidateExtent
@@ -333,6 +337,27 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 		result, _, _ := procDefWindowProc.Call(hwnd, uintptr(message), wParam, lParam)
 		return result
 	}
+	if state.handoff.pending() {
+		switch message {
+		case wmSelectionReady:
+			state.renderErr = state.handoff.finish()
+			if state.handoff.cancelled {
+				state.selected = false
+			}
+			procDestroyWindow.Call(hwnd)
+			return 0
+		case wmClose, wmRButtonDown:
+			state.handoff.cancelled = true
+			return 0
+		case wmKeyDown:
+			if wParam == vkEscape {
+				state.handoff.cancelled = true
+			}
+			return 0
+		case wmLButtonDown, wmLButtonUp, wmMouseMove, wmKeyUp, wmTimer:
+			return 0
+		}
+	}
 	switch message {
 	case wmTimer:
 		if state.snapshot != nil && wParam == 2 {
@@ -351,6 +376,19 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 			}
 			return 0
 		}
+	case wmActivate:
+		if wParam&0xffff == 0 {
+			state.dragging = false
+			state.gesture = candidateGesture{threshold: state.gesture.threshold}
+			procReleaseCapture.Call()
+		}
+	case wmCaptureChanged, wmCancelMode:
+		state.dragging = false
+		state.gesture = candidateGesture{threshold: state.gesture.threshold}
+		if message == wmCancelMode {
+			procReleaseCapture.Call()
+		}
+		return 0
 	case wmLButtonDown:
 		if state.candidateMode {
 			state.refreshCandidate()
@@ -443,10 +481,16 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 }
 
 func (state *selectionState) finishSelection() {
-	if state.beforeClose != nil {
-		state.renderErr = state.beforeClose(state.result)
+	if state.beforeClose == nil {
+		procDestroyWindow.Call(state.hwnd)
+		return
 	}
-	procDestroyWindow.Call(state.hwnd)
+	// Window creation/presentation on another UI thread may send messages to
+	// this foreground window. Never wait for that thread inside WM_LBUTTONUP.
+	hwnd := state.hwnd
+	state.handoff.start(state.result, state.beforeClose, func() {
+		procPostMessage.Call(hwnd, wmSelectionReady, 0, 0)
+	})
 }
 
 func mousePoint(lParam uintptr) image.Point {
@@ -554,6 +598,9 @@ func (state *selectionState) present() error {
 	)
 	if ok == 0 {
 		return win32Error("UpdateLayeredWindow", callErr)
+	}
+	if toolbar := activeToolbarWindow.Load(); toolbar != 0 {
+		procPostMessage.Call(toolbar, wmToolbarBackdrop, state.hwnd, 0)
 	}
 	return nil
 }

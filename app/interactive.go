@@ -84,7 +84,7 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 		frozen.Close()
 		return err
 	}
-	toolbar, err := selector.ShowToolbarContext(ctx, region, frozen.WindowHandle())
+	toolbar, err := selector.ShowToolbarContext(ctx, region, frozen.WindowHandle(), frozen.Background)
 	if err != nil {
 		frozen.Close()
 		return err

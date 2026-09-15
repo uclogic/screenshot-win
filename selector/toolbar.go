@@ -12,6 +12,12 @@ import (
 // Action is the operation selected from the post-selection toolbar.
 type Action uint8
 
+// ToolbarBackground returns an owned image in physical screen coordinates.
+// A nil result requests the neutral material fallback.
+// The toolbar calls it on a worker goroutine; providers must be safe for
+// concurrent calls from the toolbar and its style panel.
+type ToolbarBackground func(image.Rectangle) image.Image
+
 const (
 	ActionCancel Action = iota
 	ActionSave

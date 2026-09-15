@@ -23,6 +23,7 @@ const (
 	wmLButtonDblClk   = 0x0203
 	wmMButtonDown     = 0x0207
 	wmMButtonUp       = 0x0208
+	wmFrozenFocus     = wmUser + 107
 	wmFrozenAnnotate  = wmUser + 91
 	wmFrozenRender    = wmUser + 92
 	wmFrozenCancel    = wmUser + 93
@@ -129,29 +130,30 @@ type frozenTextEdit struct {
 }
 type frozenState struct {
 	*selectionState
-	source        image.Image
-	region        image.Rectangle
-	document      *editor.Document
-	viewport      editor.Viewport
-	mu            sync.Mutex
-	request       *frozenAnnotationRequest
-	selected      editor.AnnotationID
-	transform     *frozenTransform
-	textEdit      *frozenTextEdit
-	panning       bool
-	panLast       image.Point
-	dpi           int
-	draftPixels   []frozenDraftPixel
-	lastDraw      time.Time
-	framePending  bool
-	frameTimerSet bool
-	styleUpdates  chan *frozenStyleRequest
-	styleEvents   chan editor.Style
-	toolSwapWait  bool
-	toolSwapFrom  editor.Tool
-	toolStyleWait bool
-	toolStyleFor  editor.Tool
-	toolStyle     editor.Style
+	source           image.Image
+	region           image.Rectangle
+	document         *editor.Document
+	viewport         editor.Viewport
+	mu               sync.Mutex
+	request          *frozenAnnotationRequest
+	selected         editor.AnnotationID
+	transform        *frozenTransform
+	textEdit         *frozenTextEdit
+	panning          bool
+	panLast          image.Point
+	dpi              int
+	draftPixels      []frozenDraftPixel
+	lastDraw         time.Time
+	framePending     bool
+	frameTimerSet    bool
+	styleUpdates     chan *frozenStyleRequest
+	styleEvents      chan editor.Style
+	backdropRequests chan frozenBackdropRequest
+	toolSwapWait     bool
+	toolSwapFrom     editor.Tool
+	toolStyleWait    bool
+	toolStyleFor     editor.Tool
+	toolStyle        editor.Style
 }
 
 type frozenDraftPixel struct {
@@ -208,6 +210,29 @@ func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, conten
 		},
 		styles:   styleEvents,
 		rendered: document.Rendered,
+		background: func(bounds image.Rectangle) image.Image {
+			select {
+			case <-done:
+				return nil
+			default:
+			}
+			request := frozenBackdropRequest{bounds: bounds, result: make(chan image.Image, 1)}
+			select {
+			case state.backdropRequests <- request:
+			default:
+				return nil
+			}
+			procPostMessage.Call(result.hwnd, wmFrozenBackdrop, 0, 0)
+			timer := time.NewTimer(50 * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case backdrop := <-request.result:
+				return backdrop
+			case <-done:
+			case <-timer.C:
+			}
+			return nil
+		},
 	}, nil
 }
 
@@ -256,6 +281,7 @@ func runFrozenWindow(desktop, region image.Rectangle, source image.Image, docume
 			state.dpi = int(dpi)
 		}
 	}
+	state.backdropRequests = make(chan frozenBackdropRequest, 1)
 	frozenStates.Store(hwnd, state)
 	defer frozenStates.Delete(hwnd)
 	if err := state.initializeSurface(); err != nil {
@@ -373,6 +399,37 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 	}
 	state := value.(*frozenState)
 	switch message {
+	case wmActivate:
+		if wParam&0xffff == 0 {
+			// End transient input before losing activation, even if no
+			// button-up arrives (task switching, toolbar clicks, dialogs).
+			if state.interruptPointerGesture() {
+				procPostMessage.Call(hwnd, wmFrozenRender, 0, 0)
+			}
+			procReleaseCapture.Call()
+		} else if toolbar := activeToolbarWindow.Load(); toolbar != 0 {
+			procPostMessage.Call(toolbar, wmToolbarRaise, hwnd, 0)
+		}
+		// Preserve DefWindowProc's normal activation/focus processing.
+	case wmCaptureChanged, wmCancelMode:
+		if state.interruptPointerGesture() {
+			state.renderOrCloseFrozen()
+		}
+		if message == wmCancelMode {
+			procReleaseCapture.Call()
+		}
+		return 0
+	case wmFrozenFocus:
+		procSetForegroundWindow.Call(hwnd)
+		procSetFocus.Call(hwnd)
+		return 0
+	case wmFrozenBackdrop:
+		select {
+		case request := <-state.backdropRequests:
+			request.result <- copyFrozenBackdrop(state.selectionState, request.bounds)
+		default:
+		}
+		return 0
 	case wmNCHitTest:
 		return htClient
 	case wmFrozenAnnotate:
@@ -383,8 +440,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		state.selected = 0
 		state.transform = nil
 		state.renderOrCloseFrozen()
-		procSetForegroundWindow.Call(hwnd)
-		procSetFocus.Call(hwnd)
+		// Focus is handled by the separately posted wmFrozenFocus message.
 		return 0
 	case wmFrozenRender:
 		state.renderOrCloseFrozen()
@@ -1003,6 +1059,7 @@ func (state *frozenState) commitTransform() {
 		return
 	}
 	state.cancelAnimationFrame()
+	state.transform = nil // ReleaseCapture can reenter WM_CAPTURECHANGED.
 	procReleaseCapture.Call()
 	if sameAnnotationGeometry(transform.original, transform.draft) || (transform.draft.Tool != editor.ToolText && transform.draft.Start == transform.draft.End) {
 		state.transform = nil
@@ -1912,4 +1969,22 @@ func (state *frozenState) copyViewport(view *image.NRGBA, destination image.Rect
 			state.pixels[destinationIndex+3] = 255
 		}
 	}
+}
+
+// interruptPointerGesture drops only the transient gesture; the selected tool
+// remains usable when capture is stolen or Windows enters a modal operation.
+func (state *frozenState) interruptPointerGesture() bool {
+	request := state.activeRequest()
+	changed := state.panning || state.transform != nil || (request != nil && request.dragging)
+	if !changed {
+		return false
+	}
+	state.panning = false
+	state.transform = nil
+	state.cancelAnimationFrame()
+	state.restoreDraftPixels()
+	if request != nil && request.dragging {
+		state.continueOrFinishDrawingRequest(request)
+	}
+	return true
 }

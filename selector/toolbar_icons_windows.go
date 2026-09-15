@@ -69,13 +69,21 @@ type toolbarGlyphTransform struct {
 	x     float32
 	y     float32
 	scale float32
+	angle float64
 }
 
 func (transform toolbarGlyphTransform) point(x, y float32) gdipPointF {
+	if transform.angle != 0 {
+		s, c := math.Sincos(transform.angle)
+		dx, dy := float64(x-12), float64(y-12)
+		x, y = float32(12+dx*c-dy*s), float32(12+dx*s+dy*c)
+	}
 	return gdipPointF{X: transform.x + x*transform.scale, Y: transform.y + y*transform.scale}
 }
 
 type toolbarIconRenderer struct {
+	ink      *color.NRGBA
+	motion   *toolbarMotionFrame
 	dc       uintptr
 	graphics uintptr
 }
@@ -136,15 +144,36 @@ func (renderer *toolbarIconRenderer) draw(action Action, button image.Rectangle,
 	if size <= 0 {
 		return
 	}
+	motion := toolbarMotionFrame{scale: 1}
+	if renderer.motion != nil {
+		motion = *renderer.motion
+	}
+	size *= float32(motion.scale)
 	transform := toolbarGlyphTransform{
 		x:     float32(button.Min.X+button.Max.X)/2 - size/2,
 		y:     float32(button.Min.Y+button.Max.Y)/2 - size/2,
 		scale: size / toolbarGlyphViewBox,
 	}
+	transform.y += float32(motion.y * float64(dpi) / 96)
+	if action == ActionPin {
+		transform.angle = -5 * math.Pi / 180 * motion.semantic
+	}
 	stroke := toolbarIconStrokeWidth(dpi)
 	base := toolbarIconBaseColor(enabled)
-	if renderer.graphics == 0 || !renderer.drawGlyph(glyph, transform, base, stroke) {
-		renderer.drawFallbackGlyph(glyph, transform, base, max(1, int(math.Round(float64(stroke)))))
+	if renderer.ink != nil {
+		base = *renderer.ink
+		if !enabled {
+			base.A = 110
+		}
+	}
+	for _, part := range toolbarGlyphParts(action, glyph) {
+		partTransform := transform
+		amount := float32(motion.semantic * float64(dpi) / 96)
+		partTransform.x += part.dx * amount
+		partTransform.y += part.dy * amount
+		if renderer.graphics == 0 || !renderer.drawGlyph(part.glyph, partTransform, base, stroke) {
+			renderer.drawFallbackGlyph(part.glyph, partTransform, base, max(1, int(math.Round(float64(stroke)))))
+		}
 	}
 
 	switch action {

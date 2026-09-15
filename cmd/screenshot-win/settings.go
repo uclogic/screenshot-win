@@ -69,7 +69,7 @@ const (
 func defaultPreferences() preferences {
 	match := screenshotwin.DefaultMatchOptions()
 	return preferences{
-		General: generalPreferences{CandidateMode: "none", Hotkey: "Alt+Shift+A", Language: languageEnglish},
+		General: generalPreferences{CandidateMode: "minimal_rectangle", Hotkey: "Alt+Shift+A", Language: languageEnglish},
 		LongCapture: longCapturePreferences{
 			Mode:                longCaptureModeLegacy,
 			IntervalMS:          int(defaultCaptureInterval / time.Millisecond),

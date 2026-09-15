@@ -25,6 +25,30 @@ type toolbarGlyph struct {
 	commands []toolbarGlyphCommand
 }
 
+type toolbarGlyphPart struct {
+	glyph  toolbarGlyph
+	dx, dy float32
+}
+
+// Split only at complete subpaths; the untransformed parts retain the exact
+// pinned Tabler geometry and drawing order.
+func toolbarGlyphParts(action Action, glyph toolbarGlyph) []toolbarGlyphPart {
+	split, dx, dy := 0, float32(0), float32(0)
+	switch action {
+	case ActionCopy:
+		split, dx, dy = 10, 1, 1 // Front rounded paper, then the rear outline.
+	case ActionScroll:
+		split, dy = 5, 2 // Arrow head and shaft, then the rounded frame.
+	}
+	if split == 0 {
+		return []toolbarGlyphPart{{glyph: glyph}}
+	}
+	return []toolbarGlyphPart{
+		{glyph: toolbarGlyph{source: glyph.source, commands: glyph.commands[:split]}, dx: dx, dy: dy},
+		{glyph: toolbarGlyph{source: glyph.source, commands: glyph.commands[split:]}},
+	}
+}
+
 func glyphMove(x, y float32) toolbarGlyphCommand {
 	return toolbarGlyphCommand{op: toolbarGlyphMove, args: [6]float32{x, y}}
 }

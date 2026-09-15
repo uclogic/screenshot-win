@@ -12,7 +12,7 @@ import (
 )
 
 func TestCandidatePreferences(t *testing.T) {
-	if defaultPreferences().General.CandidateMode != "none" {
+	if defaultPreferences().General.CandidateMode != "minimal_rectangle" {
 		t.Fatal("wrong default")
 	}
 	for i, mode := range candidateModeNames {
@@ -35,7 +35,7 @@ func TestCandidatePreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := loadPreferences(path)
-	if err != nil || got.General.CandidateMode != "none" {
+	if err != nil || got.General.CandidateMode != "minimal_rectangle" {
 		t.Fatalf("old config: %+v %v", got, err)
 	}
 	got.General.CandidateMode = "bad"

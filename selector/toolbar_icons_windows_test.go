@@ -2,6 +2,7 @@ package selector
 
 import (
 	"image"
+	"math"
 	"testing"
 
 	"screenshot-win/editor"
@@ -57,5 +58,63 @@ func TestToolbarGDIPlusGlyphsRenderToMemory(t *testing.T) {
 	}
 	if partialPixels == 0 {
 		t.Fatal("toolbar glyphs rendered without any anti-aliased edge pixels")
+	}
+}
+
+func TestToolbarAnimatedGlyphsStayInsideFixedButtons(t *testing.T) {
+	for _, dpi := range []int{96, 144, 192} {
+		button := glassToolbarButton(0, dpi)
+		surface := selectionState{client: image.Rectangle{Max: glassToolbarSize(1, dpi)}}
+		if err := surface.initializeSurface(); err != nil {
+			t.Fatal(err)
+		}
+		renderer := newToolbarIconRenderer(surface.memoryDC)
+		for _, fallback := range []bool{false, true} {
+			graphics := renderer.graphics
+			if fallback {
+				renderer.graphics = 0
+			}
+			for _, frame := range []toolbarMotionFrame{{scale: 1}, {scale: 1.08, y: -1, semantic: 1}, {scale: .94}} {
+				renderer.motion = &frame
+				for _, action := range selectionToolbarActions {
+					clear(surface.pixels)
+					renderer.draw(action, button, true, editor.DefaultStyle(), dpi)
+					count := 0
+					for y := 0; y < surface.client.Dy(); y++ {
+						for x := 0; x < surface.client.Dx(); x++ {
+							i := (y*surface.client.Dx() + x) * 4
+							if surface.pixels[i]|surface.pixels[i+1]|surface.pixels[i+2] == 0 {
+								continue
+							}
+							count++
+							if !image.Pt(x, y).In(button.Inset(scaleForDPI(2, dpi))) {
+								t.Fatalf("glyph escaped button: dpi=%d action=%d fallback=%v", dpi, action, fallback)
+							}
+						}
+					}
+					if count == 0 {
+						t.Fatal("empty animated glyph", dpi, action, fallback)
+					}
+				}
+			}
+			renderer.graphics = graphics
+		}
+		renderer.close()
+		surface.closeSurface()
+		if got, ok := glassToolbarActionAt(button.Min, 1, dpi); !ok || got != 0 {
+			t.Fatal("fixed hit target changed")
+		}
+	}
+}
+
+func TestToolbarGlyphRotationKeepsCenter(t *testing.T) {
+	transform := toolbarGlyphTransform{x: 10, y: 20, scale: 2, angle: -5 * math.Pi / 180}
+	center := transform.point(12, 12)
+	if center.X != 34 || center.Y != 44 {
+		t.Fatal("rotation moved center", center)
+	}
+	p := transform.point(18, 12)
+	if math.Abs(math.Hypot(float64(p.X-center.X), float64(p.Y-center.Y))-12) > 1e-5 {
+		t.Fatal("rotation changed radius")
 	}
 }

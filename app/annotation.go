@@ -25,7 +25,7 @@ func (runner *Runner) runInlineAnnotation(ctx context.Context, source image.Imag
 		return err
 	}
 	defer frozen.Close()
-	toolbar, err := selector.ShowAnnotationToolbarContext(ctx, region, frozen.WindowHandle())
+	toolbar, err := selector.ShowAnnotationToolbarContext(ctx, region, frozen.WindowHandle(), frozen.Background)
 	if err != nil {
 		return err
 	}

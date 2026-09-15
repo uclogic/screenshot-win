@@ -6,7 +6,9 @@ type SelectionOptions struct {
 	Mode     CandidateMode
 	Desktop  image.Rectangle
 	Snapshot image.Image
-	// BeforeClose prepares the next window while the selection overlay is visible.
+	// BeforeClose prepares the next window on a worker goroutine while the
+	// selection overlay remains visible and continues pumping window messages.
+	// SelectWithOptions waits for it to return, including when cancelled.
 	BeforeClose func(image.Rectangle) error
 }
 

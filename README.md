@@ -10,6 +10,7 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 - Pin a captured image above other windows
 - Add rectangles, arrows, and text annotations
 - Adjust annotation colors and line widths
+- Use a native light glass toolbar with rounded color and line-width panels
 - Run from the Windows notification area
 - Configure the global capture shortcut and scrolling matcher from a native Windows settings dialog
 - Capture multi-monitor desktops using physical pixel coordinates
@@ -27,6 +28,26 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 - `zip` and `sha256sum` are optional and are only needed for creating a release archive
 
 The Windows implementation uses the Win32 API through Go's standard library and does not use CGO. As a result, MinGW and Wine are not required to cross-compile the executable on Linux.
+
+The post-selection and inline annotation toolbars render a light glass material
+using cached background blur, subtle edge refraction, highlights, and shadows.
+Native layered windows display the material; no browser runtime or Windows 11
+Acrylic API is required. Hover, press, and selection transitions stop repainting
+when idle. The backdrop comes from the frozen editor surface, so toolbar effects
+are not included in saved, copied, or pinned images. If alpha presentation fails,
+the toolbar falls back to a solid light surface.
+
+Toolbar icons ease into a small lift and 1.08× scale on hover (140 ms), shrink
+to 0.94× on press (80 ms), and recover on release (120 ms). Copy, scrolling
+capture, and pin add a single subtle paper offset, arrow dip, or rotation on
+pointer entry. Selected tools remain centered with a blue highlight; color and
+line-width buttons also show selection while their panels are open. Hit areas
+stay fixed, commands run immediately, and interrupted animations reverse from
+their current pose. The solid-surface fallback retains the same icon feedback.
+
+The reusable material renderer lives in `internal/ui/glass`. Settings can reuse
+its theme and renderer in a later update; the settings dialog and the toolbar
+shown during active scrolling capture retain their existing appearance.
 
 ## Build Windows on Linux
 
@@ -99,7 +120,7 @@ The generated file has this shape:
 hotkey = 'Alt+Shift+A'
 pin_hotkey = ''
 language = 'en'
-candidate_mode = 'none'
+candidate_mode = 'minimal_rectangle'
 
 [long_capture]
 mode = 'legacy'
@@ -114,9 +135,9 @@ stationary_threshold = 0.5
 
 Set `general.candidate_mode` in `screenshot-win.toml` to choose a candidate mode:
 
-- `none` (default): manual selection.
-- `windows ui interface`: reserved, not implemented; currently behaves like none.
-- `minimal Rectangle`: freeze the desktop on entry and detect rectangular regions using pure Go image processing.
+- `none`: manual selection.
+- `windows_ui_interface`: reserved, not implemented; currently behaves like none.
+- `minimal_rectangle` (default): freeze the desktop on entry and detect rectangular regions using pure Go image processing.
 
 Move the mouse to preview the smallest detected rectangle containing it. Candidates must be at least 100×80 physical pixels. While detection runs, or if no candidate contains the pointer, the preview uses the entire current monitor, including the taskbar. Click to confirm, or hold and drag to select manually; manual selections have no minimum size. Esc or right-click cancels. Detection and the final screenshot use the same frozen frame. After selection, use the toolbar to save, copy, annotate, pin, or start a scrolling capture.
 
