@@ -82,6 +82,7 @@ var (
 	procFrozenCreateFont       = gdi32.NewProc("CreateFontW")
 	procFrozenSetTimer         = user32.NewProc("SetTimer")
 	procFrozenKillTimer        = user32.NewProc("KillTimer")
+	procUpdateWindow           = user32.NewProc("UpdateWindow")
 )
 
 type frozenStart struct {
@@ -122,6 +123,9 @@ type frozenTextEdit struct {
 	style                    editor.Style
 	start                    image.Point
 	closing                  bool
+	bounds                   image.Rectangle
+	composing                bool
+	composition              string
 }
 type frozenState struct {
 	*selectionState
@@ -412,6 +416,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmLButtonDown:
+		state.finishTextEdit(true, false, false)
 		point := mousePoint(lParam)
 		if !point.In(state.region) {
 			return 0
@@ -447,6 +452,9 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 			procReleaseCapture.Call()
 			if isDrawing {
 				start, end, tool, style := request.start, request.current, request.tool, request.style
+				// Restore the last preview before resetting its pixel bookkeeping.
+				// Mouse-up can contain a newer endpoint than the last timer frame.
+				state.restoreDraftPixels()
 				state.resetDrawingGesture(request)
 				if tool == editor.ToolText {
 					if err := state.beginTextEdit(0, start, "", style); err != nil {
@@ -462,7 +470,12 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 					}
 					state.selected = id
 				}
-				state.renderOrCloseFrozen()
+				state.drawCommittedVector(editor.Annotation{Tool: tool, Start: start, End: end, Style: style})
+				if err := state.present(); err != nil {
+					state.renderErr = err
+					procDestroyWindow.Call(state.hwnd)
+					return 0
+				}
 				state.continueOrFinishDrawingRequest(request)
 				return 0
 			}
@@ -511,6 +524,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMButtonDown:
+		state.finishTextEdit(true, false, false)
 		state.panning = true
 		state.panLast = mousePoint(lParam)
 		procSetCapture.Call(hwnd)
@@ -544,6 +558,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMouseWheel:
+		state.finishTextEdit(true, false, false)
 		delta := int(int16((wParam >> 16) & 0xffff))
 		screen := image.Pt(int(int16(lParam&0xffff)), int(int16((lParam>>16)&0xffff)))
 		anchor := screen.Sub(state.desktop.Min)
@@ -1139,25 +1154,16 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	}
 	className, _ := syscall.UTF16PtrFromString("EDIT")
 	fontHeight := max(14, int(math.Round(style.Width))*8)
-	screenFontHeight := max(14, int(math.Round(float64(fontHeight)*state.viewport.Scale)))
-	minimumWidth := scaleForDPI(160, state.dpi)
-	textWidth := minimumWidth
-	if id != 0 {
-		if annotation, ok := state.document.Get(id); ok {
-			bounds := editor.AnnotationBounds(annotation)
-			textWidth = max(textWidth, abs(state.viewport.ImageToScreen(bounds.Max).X-state.viewport.ImageToScreen(bounds.Min).X)+scaleForDPI(24, state.dpi))
-		}
-	}
-	height := max(scaleForDPI(28, state.dpi), screenFontHeight+scaleForDPI(10, state.dpi))
+	screenFontHeight := max(1, int(math.Round(float64(fontHeight)*state.viewport.Scale)))
 	local := state.viewport.ImageToScreen(start)
-	regionScreen := state.region.Add(state.desktop.Min)
-	width := min(textWidth, regionScreen.Dx())
-	height = min(height, regionScreen.Dy())
-	x := max(regionScreen.Min.X, min(local.X+state.desktop.Min.X, regionScreen.Max.X-width))
-	y := max(regionScreen.Min.Y, min(local.Y+state.desktop.Min.Y, regionScreen.Max.Y-height))
+	// Keep the glyph origin at the clicked image coordinate, including at edges.
+	// The editor paints the actual document preview over its screenshot backdrop.
+	width := max(1, state.region.Max.X-local.X)
+	height := max(1, min(state.region.Max.Y-local.Y, screenFontHeight*2+4))
+	x, y := local.X+state.desktop.Min.X, local.Y+state.desktop.Min.Y
 	edit, _, callErr := procCreateWindowEx.Call(
 		wsExTopmost|wsExToolWindow, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(characters)),
-		wsPopup|wsBorder|wsVisible|wsTabStop|esAutoHScroll,
+		wsPopup|wsTabStop|esAutoHScroll,
 		uintptr(x), uintptr(y), uintptr(width), uintptr(height), state.hwnd, 0, 0, 0,
 	)
 	if edit == 0 {
@@ -1165,7 +1171,7 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	}
 	face, _ := syscall.UTF16PtrFromString("Microsoft YaHei UI")
 	font, _, _ := procFrozenCreateFont.Call(uintptr(-screenFontHeight), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(face)))
-	textEdit := &frozenTextEdit{hwnd: edit, font: font, id: id, style: style, start: start}
+	textEdit := &frozenTextEdit{hwnd: edit, font: font, id: id, style: style, start: start, bounds: image.Rect(local.X, local.Y, local.X+width, local.Y+height)}
 	state.textEdit = textEdit
 	frozenTextStates.Store(edit, state)
 	oldProcedure, _, callErr := procFrozenSetWindowLongPtr.Call(edit, ^uintptr(3), frozenTextProcedure)
@@ -1182,7 +1188,10 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	if font != 0 {
 		procSendMessage.Call(edit, wmSetFont, font, 1)
 	}
+	procSendMessage.Call(edit, 0x00D3, 3, 1) // EM_SETMARGINS: one-pixel glyph inset, no right margin.
 	procSendMessage.Call(edit, emSetSel, 0, ^uintptr(0))
+	state.renderOrCloseFrozen()
+	procShowWindow.Call(edit, 5)
 	procSetForegroundWindow.Call(edit)
 	procSetFocus.Call(edit)
 	return nil
@@ -1200,7 +1209,22 @@ func frozenTextWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uint
 		return 0
 	}
 	switch message {
+	case wmPaint:
+		state.paintTextEditor()
+		return 0
+	case 0x0014: // WM_ERASEBKGND: painting includes the screenshot backdrop.
+		return 1
+	case 0x010D: // WM_IME_STARTCOMPOSITION
+		textEdit.composing = true
+	case 0x010E: // WM_IME_ENDCOMPOSITION
+		textEdit.composing = false
+		textEdit.composition = ""
+	case 0x010F: // WM_IME_COMPOSITION
+		textEdit.composition = frozenComposition(hwnd)
 	case wmKeyDown:
+		if textEdit.composing {
+			break
+		}
 		if wParam == vkReturn {
 			procPostMessage.Call(state.hwnd, wmFrozenTextSave, 0, 0)
 			return 0
@@ -1216,6 +1240,11 @@ func frozenTextWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uint
 		}
 	}
 	result, _, _ := procFrozenCallWindowProc.Call(textEdit.oldProcedure, hwnd, uintptr(message), wParam, lParam)
+	switch message {
+	case 0x0007, 0x000C, wmKeyDown, 0x0102, 0x010E, 0x010F, 0x0300, 0x0301, 0x0302, 0x0303, 0x0304, wmLButtonDown, wmLButtonUp, wmMouseMove:
+		procInvalidateRect.Call(hwnd, 0, 0)
+		procUpdateWindow.Call(hwnd)
+	}
 	return result
 }
 
@@ -1552,6 +1581,18 @@ func (state *frozenState) drawFastVector(annotation editor.Annotation) {
 	}
 }
 
+// drawCommittedVector retains the stable desktop and paints only the final
+// vector and its handles. A completed vector must no longer be restorable as
+// a temporary draft when the next drawing gesture begins.
+func (state *frozenState) drawCommittedVector(annotation editor.Annotation) {
+	if annotation.Start != annotation.End {
+		state.drawFastVector(annotation)
+		state.drawSelectionOverlay(annotation)
+	}
+	state.draftPixels = nil
+	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+}
+
 func screenArrowHead(start, end image.Point, width, scale float64) (image.Point, image.Point, bool) {
 	dx, dy := float64(end.X-start.X), float64(end.Y-start.Y)
 	length := math.Hypot(dx, dy)
@@ -1730,7 +1771,9 @@ func (state *frozenState) renderFrozenDesktop() error {
 	}
 	rendered := state.document.Rendered()
 	request := state.activeRequest()
-	if state.transform != nil {
+	if state.textEdit != nil {
+		rendered = state.document.RenderedWithout(state.textEdit.id)
+	} else if state.transform != nil {
 		rendered = state.document.RenderedPreview(state.transform.id, &state.transform.draft)
 	} else if request != nil && request.dragging && request.drawing && request.current != request.start {
 		annotation := editor.Annotation{Tool: request.tool, Start: request.start, End: request.current, Style: request.style}
@@ -1741,7 +1784,7 @@ func (state *frozenState) renderFrozenDesktop() error {
 	state.draftPixels = nil
 	if state.transform != nil {
 		state.drawSelectionOverlay(state.transform.draft)
-	} else if state.selected != 0 {
+	} else if state.selected != 0 && state.textEdit == nil {
 		if annotation, ok := state.document.Get(state.selected); ok {
 			state.drawSelectionOverlay(annotation)
 		}

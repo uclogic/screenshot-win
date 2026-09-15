@@ -52,26 +52,28 @@ const (
 )
 
 var (
-	comctl32                 = syscall.NewLazyDLL("comctl32.dll")
-	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
-	procMonitorFromRect      = user32.NewProc("MonitorFromRect")
-	procGetMonitorInfo       = user32.NewProc("GetMonitorInfoW")
-	procGetDPIForWindow      = user32.NewProc("GetDpiForWindow")
-	procSetWindowPos         = user32.NewProc("SetWindowPos")
-	procInvalidateRect       = user32.NewProc("InvalidateRect")
-	procTrackMouseEvent      = user32.NewProc("TrackMouseEvent")
-	procBeginPaint           = user32.NewProc("BeginPaint")
-	procEndPaint             = user32.NewProc("EndPaint")
-	procFillRect             = user32.NewProc("FillRect")
-	procSendMessage          = user32.NewProc("SendMessageW")
-	procCreateSolidBrush     = gdi32.NewProc("CreateSolidBrush")
-	procCreatePen            = gdi32.NewProc("CreatePen")
-	procMoveToEx             = gdi32.NewProc("MoveToEx")
-	procLineTo               = gdi32.NewProc("LineTo")
-	procEllipse              = gdi32.NewProc("Ellipse")
-	procSetTextColor         = gdi32.NewProc("SetTextColor")
-	procSetBkMode            = gdi32.NewProc("SetBkMode")
-	procTextOut              = gdi32.NewProc("TextOutW")
+	comctl32                   = syscall.NewLazyDLL("comctl32.dll")
+	procInitCommonControlsEx   = comctl32.NewProc("InitCommonControlsEx")
+	procMonitorFromRect        = user32.NewProc("MonitorFromRect")
+	procGetMonitorInfo         = user32.NewProc("GetMonitorInfoW")
+	procGetDPIForWindow        = user32.NewProc("GetDpiForWindow")
+	procSetWindowPos           = user32.NewProc("SetWindowPos")
+	procInvalidateRect         = user32.NewProc("InvalidateRect")
+	procTrackMouseEvent        = user32.NewProc("TrackMouseEvent")
+	procBeginPaint             = user32.NewProc("BeginPaint")
+	procEndPaint               = user32.NewProc("EndPaint")
+	procFillRect               = user32.NewProc("FillRect")
+	procSendMessage            = user32.NewProc("SendMessageW")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
+	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procCreatePen              = gdi32.NewProc("CreatePen")
+	procMoveToEx               = gdi32.NewProc("MoveToEx")
+	procLineTo                 = gdi32.NewProc("LineTo")
+	procEllipse                = gdi32.NewProc("Ellipse")
+	procSetTextColor           = gdi32.NewProc("SetTextColor")
+	procSetBkMode              = gdi32.NewProc("SetBkMode")
+	procTextOut                = gdi32.NewProc("TextOutW")
 
 	toolbarProcedure    = syscall.NewCallback(toolbarWindowProcedure)
 	toolbarStates       sync.Map
@@ -906,12 +908,10 @@ func (state *toolbarState) choosePanelOption(index int) {
 }
 
 func (state *toolbarState) paintStylePanel(hwnd uintptr) error {
-	var paint paintStruct
-	dc, _, callErr := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-	if dc == 0 {
-		return win32Error("BeginPaint style panel", callErr)
-	}
-	defer procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+	return paintToolbarBuffered(hwnd, state.panel.bounds.Size(), state.drawStylePanel)
+}
+
+func (state *toolbarState) drawStylePanel(dc uintptr) error {
 	background, _, _ := procCreateSolidBrush.Call(rgb(42, 45, 50))
 	if background == 0 {
 		return fmt.Errorf("CreateSolidBrush failed for style panel")
@@ -1101,13 +1101,47 @@ func (state *toolbarState) rearmPersistentActions() {
 }
 
 func (state *toolbarState) paint(hwnd uintptr) error {
+	return paintToolbarBuffered(hwnd, state.clientSize, state.draw)
+}
+
+// Render a complete frame offscreen so background fills and individual glyphs
+// never become visible before the rest of the toolbar is ready.
+func paintToolbarBuffered(hwnd uintptr, size image.Point, draw func(uintptr) error) error {
 	var paint paintStruct
-	dc, _, callErr := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-	if dc == 0 {
+	windowDC, _, callErr := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+	if windowDC == 0 {
 		return win32Error("BeginPaint", callErr)
 	}
 	defer procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+	if size.X <= 0 || size.Y <= 0 {
+		return nil
+	}
+	dc, _, callErr := procCreateCompatibleDC.Call(windowDC)
+	if dc == 0 {
+		return win32Error("CreateCompatibleDC toolbar", callErr)
+	}
+	defer procDeleteDC.Call(dc)
+	bitmap, _, callErr := procCreateCompatibleBitmap.Call(windowDC, uintptr(size.X), uintptr(size.Y))
+	if bitmap == 0 {
+		return win32Error("CreateCompatibleBitmap toolbar", callErr)
+	}
+	defer procDeleteObject.Call(bitmap)
+	previous, _, callErr := procSelectObject.Call(dc, bitmap)
+	if previous == 0 || previous == ^uintptr(0) {
+		return win32Error("SelectObject toolbar bitmap", callErr)
+	}
+	defer procSelectObject.Call(dc, previous)
+	if err := draw(dc); err != nil {
+		return err
+	}
+	const srccopy = 0x00CC0020
+	if ok, _, err := procBitBlt.Call(windowDC, 0, 0, uintptr(size.X), uintptr(size.Y), dc, 0, 0, srccopy); ok == 0 {
+		return win32Error("BitBlt toolbar", err)
+	}
+	return nil
+}
 
+func (state *toolbarState) draw(dc uintptr) error {
 	background, _, _ := procCreateSolidBrush.Call(rgb(42, 45, 50))
 	if background == 0 {
 		return fmt.Errorf("CreateSolidBrush failed for toolbar background")

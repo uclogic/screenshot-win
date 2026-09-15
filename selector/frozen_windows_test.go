@@ -11,6 +11,47 @@ import (
 	"screenshot-win/editor"
 )
 
+func TestCommittedVectorReplacesLastPreviewAndRetainsStablePixels(t *testing.T) {
+	for _, tool := range []editor.Tool{editor.ToolRectangle, editor.ToolArrow} {
+		t.Run(fmt.Sprint(tool), func(t *testing.T) {
+			bounds := image.Rect(0, 0, 240, 180)
+			newState := func() *frozenState {
+				pixels := make([]byte, bounds.Dx()*bounds.Dy()*4)
+				for i := range pixels {
+					pixels[i] = byte(i % 251)
+				}
+				return &frozenState{
+					selectionState: &selectionState{client: bounds, pixels: pixels},
+					region:         bounds, viewport: editor.Viewport{Scale: 1}, dpi: 96,
+				}
+			}
+			state, expected := newState(), newState()
+			annotation := editor.Annotation{Tool: tool, Start: image.Pt(30, 35), End: image.Pt(190, 140), Style: editor.DefaultStyle()}
+			preview := annotation
+			preview.End = image.Pt(210, 95)
+			state.drawFastVector(preview)
+			state.restoreDraftPixels()
+			state.resetDrawingGesture(&frozenAnnotationRequest{})
+			state.drawCommittedVector(annotation)
+			expected.drawFastVector(annotation)
+			expected.drawSelectionOverlay(annotation)
+			drawOuterPixelBorder(expected.pixels, bounds.Dx(), bounds, bounds)
+			if !bytes.Equal(state.pixels, expected.pixels) {
+				t.Fatal("committed frame contains stale preview pixels or misses final geometry/handles")
+			}
+			if len(state.draftPixels) != 0 {
+				t.Fatal("committed vector still tracked as a temporary draft")
+			}
+			stable := append([]byte(nil), state.pixels...)
+			state.drawFastVector(preview)
+			state.restoreDraftPixels()
+			if !bytes.Equal(state.pixels, stable) {
+				t.Fatal("next preview damaged the committed frame")
+			}
+		})
+	}
+}
+
 func TestDraftArrowTouchesOnlyVectorPixelsAndRestoresThem(t *testing.T) {
 	const width, height = 1000, 700
 	pixels := make([]byte, width*height*4)

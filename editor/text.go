@@ -7,8 +7,11 @@ type textMask struct {
 	pixels        []byte
 }
 
-func (mask *textMask) at(x, y int) bool {
-	return mask != nil && x >= 0 && y >= 0 && x < mask.width && y < mask.height && mask.pixels[y*mask.width+x] != 0
+func (mask *textMask) coverage(x, y int) float64 {
+	if mask == nil || x < 0 || y < 0 || x >= mask.width || y >= mask.height {
+		return 0
+	}
+	return float64(mask.pixels[y*mask.width+x]) / 255
 }
 
 // textPixel is a compact deterministic bitmap renderer shared by preview and

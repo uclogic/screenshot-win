@@ -394,10 +394,7 @@ func annotationCoverage(annotation Annotation, point image.Point) float64 {
 		)
 	case ToolText:
 		if annotation.mask != nil {
-			if annotation.mask.at(point.X-annotation.Start.X, point.Y-annotation.Start.Y) {
-				return 1
-			}
-			return 0
+			return annotation.mask.coverage(point.X-annotation.Start.X, point.Y-annotation.Start.Y)
 		}
 		if textPixel(annotation.Text, point.X-annotation.Start.X, point.Y-annotation.Start.Y, max(1, int(math.Round(annotation.Style.Width)))) {
 			return 1

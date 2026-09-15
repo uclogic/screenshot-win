@@ -11,6 +11,7 @@ const (
 	editorDIBRGBColors = 0
 	editorBIRGB        = 0
 	editorTransparent  = 1
+	editorAntialiased  = 4
 	editorCleartype    = 5
 )
 
@@ -29,6 +30,7 @@ var (
 	procEditorSetBkMode            = editorGDI32.NewProc("SetBkMode")
 	procEditorSetTextColor         = editorGDI32.NewProc("SetTextColor")
 	procEditorTextOut              = editorGDI32.NewProc("TextOutW")
+	procEditorGdiFlush             = editorGDI32.NewProc("GdiFlush")
 )
 
 type editorBitmapInfoHeader struct {
@@ -62,7 +64,9 @@ func rasterizeText(text string, scale int) *textMask {
 		return nil
 	}
 	defer procEditorDeleteDC.Call(dc)
-	font, _, _ := procEditorCreateFont.Call(uintptr(-fontHeight), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, editorCleartype, 0, uintptr(unsafe.Pointer(face)))
+	// Grayscale coverage can be composited onto any screenshot background.
+	// ClearType's channel-specific coverage is unsuitable for an alpha mask.
+	font, _, _ := procEditorCreateFont.Call(uintptr(-fontHeight), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, editorAntialiased, 0, uintptr(unsafe.Pointer(face)))
 	if font == 0 {
 		return nil
 	}
@@ -89,17 +93,20 @@ func rasterizeText(text string, scale int) *textMask {
 		return nil
 	}
 	defer procEditorSelectObject.Call(dc, oldBitmap)
+	raw := unsafe.Slice((*byte)(bits), width*height*4)
+	clear(raw)
 	procEditorSetBkMode.Call(dc, editorTransparent)
 	procEditorSetTextColor.Call(dc, 0x00ffffff)
 	if ok, _, _ := procEditorTextOut.Call(dc, 1, 0, uintptr(unsafe.Pointer(&characters[0])), uintptr(len(characters)-1)); ok == 0 {
 		return nil
 	}
-	raw := unsafe.Slice((*byte)(bits), width*height*4)
+	// Finish batched GDI drawing before accessing DIB memory directly.
+	if ok, _, _ := procEditorGdiFlush.Call(); ok == 0 {
+		return nil
+	}
 	mask := &textMask{width: width, height: height, pixels: make([]byte, width*height)}
 	for index := range mask.pixels {
-		if raw[index*4] != 0 || raw[index*4+1] != 0 || raw[index*4+2] != 0 {
-			mask.pixels[index] = 255
-		}
+		mask.pixels[index] = byte((uint32(raw[index*4]) + uint32(raw[index*4+1]) + uint32(raw[index*4+2]) + 1) / 3)
 	}
 	return mask
 }
