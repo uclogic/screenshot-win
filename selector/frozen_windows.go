@@ -1866,12 +1866,8 @@ func (state *frozenState) drawSelectionOverlay(annotation editor.Annotation) {
 	const blueR, blueG, blueB = 35, 145, 255
 	switch annotation.Tool {
 	case editor.ToolRectangle:
-		start := state.viewport.ImageToScreen(annotation.Start)
-		end := state.viewport.ImageToScreen(annotation.End)
-		bounds := image.Rect(min(start.X, end.X), min(start.Y, end.Y), max(start.X, end.X), max(start.Y, end.Y))
-		state.drawOverlayRectangle(bounds, blueR, blueG, blueB)
 		for _, handle := range state.handles(annotation) {
-			state.drawSquareHandle(handle.point, blueR, blueG, blueB)
+			state.drawHollowWhiteHandle(handle.point)
 		}
 	case editor.ToolArrow:
 		for _, handle := range state.handles(annotation) {
@@ -1919,13 +1915,13 @@ func (state *frozenState) drawOverlayLine(start, end image.Point, red, green, bl
 	}
 }
 
-func (state *frozenState) drawSquareHandle(center image.Point, red, green, blue byte) {
-	radius := state.handleRadius()
+func (state *frozenState) drawHollowWhiteHandle(center image.Point) {
+	radius := max(3, scaleForDPI(3, state.dpi))
+	inner := max(1, radius-max(1, scaleForDPI(1, state.dpi)))
 	for y := center.Y - radius; y <= center.Y+radius; y++ {
 		for x := center.X - radius; x <= center.X+radius; x++ {
-			if x == center.X-radius || x == center.X+radius || y == center.Y-radius || y == center.Y+radius {
-				state.setOverlayPixel(image.Pt(x, y), red, green, blue)
-			} else {
+			distance := (x-center.X)*(x-center.X) + (y-center.Y)*(y-center.Y)
+			if distance >= inner*inner && distance <= radius*radius {
 				state.setOverlayPixel(image.Pt(x, y), 255, 255, 255)
 			}
 		}
