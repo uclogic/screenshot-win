@@ -88,7 +88,7 @@ func (state *toolbarState) inkColor() color.NRGBA {
 }
 
 func (state *toolbarState) glassContains(point image.Point, panel bool) bool {
-	size, radius := state.clientSize, float64(glass.Scale(24, state.dpi))
+	size, radius := state.clientSize, float64(glass.Scale(12, state.dpi))
 	if panel {
 		size = state.panel.bounds.Size()
 		radius = float64(glass.Scale(12, state.dpi))
@@ -142,7 +142,7 @@ func (state *toolbarState) paintGlassOrFallback(hwnd uintptr, panel bool) error 
 }
 
 func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
-	window, bounds, radius := &state.glassWindow, state.windowBounds, float64(glass.Scale(24, state.dpi))
+	window, bounds, radius := &state.glassWindow, state.windowBounds, float64(glass.Scale(12, state.dpi))
 	count := len(state.actions)
 	if panel {
 		window, bounds, radius = &state.panel.glassWindow, state.panel.bounds, float64(glass.Scale(12, state.dpi))
@@ -177,7 +177,9 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 		back := glass.Crop(source, sampleBounds)
 		if window.base == nil || window.backdrop == nil || !bytes.Equal(back.Pix, window.backdrop.Pix) {
 			body := (image.Rectangle{Max: bounds.Size()}).Inset(glass.Margin(state.dpi))
-			window.base = glass.Render(back, bounds, body, radius, state.dpi, glass.Light)
+			theme := glass.Light
+			theme.TintAmount = 1 - float64(toolbarTransparency.Load())/100
+			window.base = glass.RenderFrosted(back, bounds, body, radius, state.dpi, theme)
 			window.backdrop = back
 		}
 	}

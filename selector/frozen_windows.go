@@ -111,12 +111,14 @@ type frozenStyleResult struct {
 	err     error
 }
 type frozenTransform struct {
-	id              editor.AnnotationID
-	handle          editor.TransformHandle
-	original, draft editor.Annotation
-	anchor          image.Point
-	previous        editor.Annotation
-	fastPrepared    bool
+	id               editor.AnnotationID
+	handle           editor.TransformHandle
+	original, draft  editor.Annotation
+	anchor           image.Point
+	previous         editor.Annotation
+	fastPrepared     bool
+	minimum          image.Point
+	rectanglePreview *editor.RectanglePreview
 }
 type frozenTextEdit struct {
 	hwnd, oldProcedure, font uintptr
@@ -143,6 +145,7 @@ type frozenState struct {
 	panLast          image.Point
 	dpi              int
 	draftPixels      []frozenDraftPixel
+	draftSeen        map[int]int
 	lastDraw         time.Time
 	framePending     bool
 	frameTimerSet    bool
@@ -471,15 +474,34 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		default:
 		}
 		return 0
+	case 0x02E0: // WM_DPICHANGED
+		state.interruptPointerGesture()
+		procReleaseCapture.Call()
+		state.dpi = max(96, int(wParam&0xffff))
+		state.renderOrCloseFrozen()
+		return 0
 	case wmLButtonDown:
 		state.finishTextEdit(true, false, false)
 		point := mousePoint(lParam)
+		if state.beginSelectedHandle(point) {
+			return 0
+		}
 		if !point.In(state.region) {
+			if previous, ok := state.clearSelectionForDrawing(); ok {
+				if err := state.clearSelectionOverlay(previous); err != nil {
+					state.renderErr = err
+				}
+				state.presentOrCloseFrozen()
+			}
 			return 0
 		}
 		request := state.activeRequest()
 		if request != nil {
 			if state.beginSelectedTransform(point) {
+				return 0
+			}
+			if annotation, hit := state.document.HitTest(state.imagePoint(point), state.hitTolerance()); hit {
+				state.selectForMove(annotation, point)
 				return 0
 			}
 			cleared, clearedSelection := state.clearSelectionForDrawing()
@@ -518,6 +540,14 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 					}
 					return 0
 				}
+				if tool == editor.ToolRectangle {
+					minimum := state.rectangleMinimum()
+					if abs(end.X-start.X) < minimum.X || abs(end.Y-start.Y) < minimum.Y {
+						state.continueOrFinishDrawingRequest(request)
+						state.renderOrCloseFrozen()
+						return 0
+					}
+				}
 				if end != start {
 					id, err := state.document.Add(editor.Annotation{Tool: tool, Start: start, End: end, Style: style})
 					if err != nil {
@@ -526,7 +556,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 					}
 					state.selected = id
 				}
-				state.drawCommittedVector(editor.Annotation{Tool: tool, Start: start, End: end, Style: style})
+				state.drawCommittedVector(editor.Annotation{ID: state.selected, Tool: tool, Start: start, End: end, Style: style})
 				if err := state.present(); err != nil {
 					state.renderErr = err
 					procDestroyWindow.Call(state.hwnd)
@@ -558,6 +588,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 			return 0
 		}
 		if state.transform != nil {
+			state.updateTransform(mousePoint(lParam))
 			state.commitTransform()
 		}
 		return 0
@@ -580,6 +611,9 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMButtonDown:
+		if state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
+			return 0
+		}
 		state.finishTextEdit(true, false, false)
 		state.panning = true
 		state.panLast = mousePoint(lParam)
@@ -614,6 +648,9 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMouseWheel:
+		if state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
+			return 0
+		}
 		state.finishTextEdit(true, false, false)
 		delta := int(int16((wParam >> 16) & 0xffff))
 		screen := image.Pt(int(int16(lParam&0xffff)), int(int16((lParam>>16)&0xffff)))
@@ -836,6 +873,12 @@ func (state *frozenState) finishCurrentToolForSwitch(expected editor.Tool) {
 		return
 	}
 	state.finishRequest(nil)
+	if previous, ok := state.clearSelectionForDrawing(); ok {
+		if err := state.clearSelectionOverlay(previous); err != nil {
+			state.renderErr = err
+		}
+		state.renderOrCloseFrozen()
+	}
 }
 
 func (state *frozenState) applyPendingToolSwitch() bool {
@@ -999,30 +1042,27 @@ func (state *frozenState) beginSelectionDrag(point image.Point) {
 	}
 	annotation, ok := state.document.HitTest(state.imagePoint(point), state.hitTolerance())
 	if !ok {
-		if state.selected != 0 {
-			state.selected = 0
-			state.renderOrCloseFrozen()
+		if previous, selected := state.clearSelectionForDrawing(); selected {
+			if err := state.clearSelectionOverlay(previous); err != nil {
+				state.renderErr = err
+			}
+			state.presentOrCloseFrozen()
 		}
 		return
 	}
-	state.selected = annotation.ID
-	state.notifySelectedStyle(annotation.Style)
-	handle := editor.HandleMove
-	if candidate, hit := state.handleAt(point, annotation); hit {
-		handle = candidate
-	}
-	state.beginTransform(annotation, handle, point)
+	state.selectForMove(annotation, point)
 }
 
 func (state *frozenState) beginTransform(annotation editor.Annotation, handle editor.TransformHandle, point image.Point) {
 	state.cancelAnimationFrame()
 	state.transform = &frozenTransform{
 		id: annotation.ID, handle: handle, original: annotation, draft: annotation,
-		previous: annotation, anchor: state.imagePoint(point),
+		previous: annotation, anchor: state.viewport.ScreenToImage(point), minimum: state.rectangleMinimum(),
 	}
 	state.lastDraw = time.Time{}
 	cursorID := idcSizeAll
-	for _, candidate := range state.handles(annotation) {
+	handles := state.handles(annotation)
+	for _, candidate := range handles.items[:handles.count] {
 		if candidate.kind == handle {
 			cursorID = candidate.cursor
 			break
@@ -1039,10 +1079,12 @@ func (state *frozenState) updateTransform(point image.Point) {
 	if transform == nil {
 		return
 	}
-	current := state.imagePoint(point)
+	current := state.viewport.ScreenToImage(point)
 	draft := transform.original
 	if transform.handle == editor.HandleMove {
 		draft = editor.Translate(transform.original, current.Sub(transform.anchor), state.document.Bounds())
+	} else if transform.original.Tool == editor.ToolRectangle {
+		draft = editor.ResizeRectangle(transform.original, transform.handle, current.Sub(transform.anchor), state.document.Bounds(), transform.minimum)
 	} else {
 		draft = editor.TransformTo(transform.original, transform.handle, current, state.document.Bounds())
 	}
@@ -1107,37 +1149,36 @@ type frozenHandle struct {
 	cursor int
 }
 
-func (state *frozenState) handles(annotation editor.Annotation) []frozenHandle {
+type frozenHandleSet struct {
+	items [8]frozenHandle
+	count int
+}
+
+func (state *frozenState) handles(annotation editor.Annotation) frozenHandleSet {
+	var set frozenHandleSet
 	switch annotation.Tool {
 	case editor.ToolArrow:
-		return []frozenHandle{
-			{editor.HandleArrowStart, state.viewport.ImageToScreen(annotation.Start), idcCross},
-			{editor.HandleArrowEnd, state.viewport.ImageToScreen(annotation.End), idcCross},
-		}
+		set.items[0] = frozenHandle{editor.HandleArrowStart, state.viewport.ImageToScreen(annotation.Start), idcCross}
+		set.items[1] = frozenHandle{editor.HandleArrowEnd, state.viewport.ImageToScreen(annotation.End), idcCross}
+		set.count = 2
 	case editor.ToolRectangle:
-		start := state.viewport.ImageToScreen(annotation.Start)
-		end := state.viewport.ImageToScreen(annotation.End)
-		left, right := min(start.X, end.X), max(start.X, end.X)
-		top, bottom := min(start.Y, end.Y), max(start.Y, end.Y)
-		middleX, middleY := (left+right)/2, (top+bottom)/2
-		return []frozenHandle{
-			{editor.HandleRectangleNorthWest, image.Pt(left, top), idcSizeNWSE},
-			{editor.HandleRectangleNorth, image.Pt(middleX, top), idcSizeNS},
-			{editor.HandleRectangleNorthEast, image.Pt(right, top), idcSizeNESW},
-			{editor.HandleRectangleEast, image.Pt(right, middleY), idcSizeWE},
-			{editor.HandleRectangleSouthEast, image.Pt(right, bottom), idcSizeNWSE},
-			{editor.HandleRectangleSouth, image.Pt(middleX, bottom), idcSizeNS},
-			{editor.HandleRectangleSouthWest, image.Pt(left, bottom), idcSizeNESW},
-			{editor.HandleRectangleWest, image.Pt(left, middleY), idcSizeWE},
+		layout := state.rectangleLayout(annotation)
+		set.count = layout.Count
+		for i := 0; i < layout.Count; i++ {
+			h := layout.Handles[i]
+			set.items[i] = frozenHandle{h.Kind, image.Pt(int(math.Round(h.Point.X)), int(math.Round(h.Point.Y))), rectangleCursor(h.Kind)}
 		}
-	default:
-		return nil
 	}
+	return set
 }
 
 func (state *frozenState) handleAt(point image.Point, annotation editor.Annotation) (editor.TransformHandle, bool) {
+	if annotation.Tool == editor.ToolRectangle {
+		return state.rectangleLayout(annotation).Hit(point)
+	}
 	radius := state.handleRadius() + scaleForDPI(3, state.dpi)
-	for _, handle := range state.handles(annotation) {
+	handles := state.handles(annotation)
+	for _, handle := range handles.items[:handles.count] {
 		if abs(point.X-handle.point.X) <= radius && abs(point.Y-handle.point.Y) <= radius {
 			return handle.kind, true
 		}
@@ -1155,41 +1196,33 @@ func (state *frozenState) hitTolerance() float64 {
 	return float64(max(6, scaleForDPI(8, state.dpi))) / scale
 }
 
-func (state *frozenState) updateCursor(point image.Point) {
-	cursorID := idcArrow
+func (state *frozenState) cursorAt(point image.Point) int {
 	if state.selected != 0 {
 		if selected, ok := state.document.Get(state.selected); ok {
-			for _, handle := range state.handles(selected) {
-				radius := state.handleRadius() + scaleForDPI(3, state.dpi)
-				if abs(point.X-handle.point.X) <= radius && abs(point.Y-handle.point.Y) <= radius {
-					cursorID = handle.cursor
-					break
+			if handle, hit := state.handleAt(point, selected); hit {
+				if selected.Tool == editor.ToolArrow {
+					return idcCross
 				}
-			}
-			if cursorID == idcArrow {
-				if annotation, hit := state.document.HitTest(state.imagePoint(point), state.hitTolerance()); hit && annotation.ID == selected.ID {
-					if selected.Tool == editor.ToolText {
-						cursorID = idcIBeam
-					} else {
-						cursorID = idcSizeAll
-					}
-				}
+				return rectangleCursor(handle)
 			}
 		}
 	}
-	if cursorID == idcArrow && state.activeRequest() != nil {
-		cursorID = idcCross
-	}
-	if cursorID == idcArrow {
+	if point.In(state.region) {
 		if annotation, ok := state.document.HitTest(state.imagePoint(point), state.hitTolerance()); ok {
 			if annotation.Tool == editor.ToolText {
-				cursorID = idcIBeam
-			} else {
-				cursorID = idcSizeAll
+				return idcIBeam
 			}
+			return idcSizeAll
+		}
+		if state.activeRequest() != nil {
+			return idcCross
 		}
 	}
-	if cursor, _, _ := procLoadCursor.Call(0, uintptr(cursorID)); cursor != 0 {
+	return idcArrow
+}
+
+func (state *frozenState) updateCursor(point image.Point) {
+	if cursor, _, _ := procLoadCursor.Call(0, uintptr(state.cursorAt(point))); cursor != 0 {
 		procFrozenSetCursor.Call(cursor)
 	}
 }
@@ -1525,6 +1558,9 @@ func (state *frozenState) renderTransform(transform *frozenTransform) error {
 // old/new bounding rectangle, which is especially expensive for long diagonal
 // arrows and is unnecessary because almost all of that rectangle is empty.
 func (state *frozenState) renderFastVectorTransform(transform *frozenTransform) error {
+	if transform.draft.Tool == editor.ToolRectangle {
+		return state.renderRectangleTransform(transform)
+	}
 	if !transform.fastPrepared {
 		state.clearVectorTransformBase(transform.original)
 		transform.fastPrepared = true
@@ -1546,6 +1582,13 @@ func (state *frozenState) clearVectorTransformBase(annotation editor.Annotation)
 // the entire frozen desktop here would make every new placement pay for a
 // full-screen render before drawing can begin.
 func (state *frozenState) clearSelectionOverlay(annotation editor.Annotation) error {
+	if annotation.Tool == editor.ToolRectangle {
+		preview := state.document.NewRectanglePreview(0)
+		preview.Update(annotation, state.viewport, state.dpi)
+		state.paintRectangleFootprint(annotation, preview)
+		drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+		return nil
+	}
 	if annotation.Tool == editor.ToolArrow || annotation.Tool == editor.ToolRectangle {
 		state.restoreVectorSelectionPixels(annotation, state.document.Rendered())
 	} else {
@@ -1590,7 +1633,8 @@ func (state *frozenState) restoreVectorSelectionPixels(annotation editor.Annotat
 			clearLine(end, right, thickness)
 		}
 	}
-	for _, handle := range state.handles(annotation) {
+	handles := state.handles(annotation)
+	for _, handle := range handles.items[:handles.count] {
 		radius := state.handleRadius() + 1
 		for y := handle.point.Y - radius; y <= handle.point.Y+radius; y++ {
 			for x := handle.point.X - radius; x <= handle.point.X+radius; x++ {
@@ -1621,7 +1665,7 @@ func (state *frozenState) drawFastVector(annotation editor.Annotation) {
 	start := state.viewport.ImageToScreen(annotation.Start)
 	end := state.viewport.ImageToScreen(annotation.End)
 	thickness := math.Max(1, annotation.Style.Width*state.viewport.Scale)
-	seen := make(map[int]int)
+	seen := state.vectorPixelIndex()
 	if annotation.Tool == editor.ToolRectangle {
 		left, right := min(start.X, end.X), max(start.X, end.X)
 		top, bottom := min(start.Y, end.Y), max(start.Y, end.Y)
@@ -1642,6 +1686,11 @@ func (state *frozenState) drawFastVector(annotation editor.Annotation) {
 // vector and its handles. A completed vector must no longer be restorable as
 // a temporary draft when the next drawing gesture begins.
 func (state *frozenState) drawCommittedVector(annotation editor.Annotation) {
+	if annotation.Tool == editor.ToolRectangle && state.document != nil {
+		state.drawSelectedRectangle(annotation)
+		state.draftPixels = state.draftPixels[:0]
+		return
+	}
 	if annotation.Start != annotation.End {
 		state.drawFastVector(annotation)
 		state.drawSelectionOverlay(annotation)
@@ -1692,7 +1741,8 @@ func (state *frozenState) drawTrackedSelectionOverlay(annotation editor.Annotati
 		trackOverlayLine(image.Pt(right, bottom), image.Pt(left, bottom), track)
 		trackOverlayLine(image.Pt(left, bottom), image.Pt(left, top), track)
 	}
-	for _, handle := range state.handles(annotation) {
+	handles := state.handles(annotation)
+	for _, handle := range handles.items[:handles.count] {
 		radius := state.handleRadius()
 		for y := handle.point.Y - radius; y <= handle.point.Y+radius; y++ {
 			for x := handle.point.X - radius; x <= handle.point.X+radius; x++ {
@@ -1748,7 +1798,7 @@ func (state *frozenState) renderDraft(request *frozenAnnotationRequest) error {
 	start := state.viewport.ImageToScreen(request.start)
 	end := state.viewport.ImageToScreen(request.current)
 	thickness := math.Max(1, request.style.Width*state.viewport.Scale)
-	seen := make(map[int]int)
+	seen := state.vectorPixelIndex()
 	switch request.tool {
 	case editor.ToolRectangle:
 		left, right := min(start.X, end.X), max(start.X, end.X)
@@ -1839,6 +1889,7 @@ func (state *frozenState) renderFrozenDesktop() error {
 	view := editor.RenderViewport(rendered, state.viewport, state.region)
 	state.copyViewport(view, state.region)
 	state.draftPixels = nil
+	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	if state.transform != nil {
 		state.drawSelectionOverlay(state.transform.draft)
 	} else if state.selected != 0 && state.textEdit == nil {
@@ -1846,7 +1897,6 @@ func (state *frozenState) renderFrozenDesktop() error {
 			state.drawSelectionOverlay(annotation)
 		}
 	}
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	return state.present()
 }
 
@@ -1866,11 +1916,10 @@ func (state *frozenState) drawSelectionOverlay(annotation editor.Annotation) {
 	const blueR, blueG, blueB = 35, 145, 255
 	switch annotation.Tool {
 	case editor.ToolRectangle:
-		for _, handle := range state.handles(annotation) {
-			state.drawHollowWhiteHandle(handle.point)
-		}
+		state.drawSelectedRectangle(annotation)
 	case editor.ToolArrow:
-		for _, handle := range state.handles(annotation) {
+		handles := state.handles(annotation)
+		for _, handle := range handles.items[:handles.count] {
 			state.drawRoundHandle(handle.point, blueR, blueG, blueB)
 		}
 	case editor.ToolText:
@@ -1911,19 +1960,6 @@ func (state *frozenState) drawOverlayLine(start, end image.Point, red, green, bl
 		if twice < dx {
 			err += dx
 			start.Y += sy
-		}
-	}
-}
-
-func (state *frozenState) drawHollowWhiteHandle(center image.Point) {
-	radius := max(3, scaleForDPI(3, state.dpi))
-	inner := max(1, radius-max(1, scaleForDPI(1, state.dpi)))
-	for y := center.Y - radius; y <= center.Y+radius; y++ {
-		for x := center.X - radius; x <= center.X+radius; x++ {
-			distance := (x-center.X)*(x-center.X) + (y-center.Y)*(y-center.Y)
-			if distance >= inner*inner && distance <= radius*radius {
-				state.setOverlayPixel(image.Pt(x, y), 255, 255, 255)
-			}
 		}
 	}
 }

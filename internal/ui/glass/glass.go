@@ -17,7 +17,7 @@ type Theme struct {
 var Light = Theme{
 	Tint: color.NRGBA{245, 249, 255, 255}, Ink: color.NRGBA{35, 45, 60, 255},
 	Hover: color.NRGBA{255, 255, 255, 100}, Selected: color.NRGBA{90, 160, 245, 90},
-	TintAmount: .30,
+	TintAmount: .24,
 }
 
 func Scale(n, dpi int) int { return (n*max(96, dpi) + 48) / 96 }
@@ -62,9 +62,26 @@ func Contains(p image.Point, b image.Rectangle, radius float64) bool {
 // Render produces premultiplied RGBA. The material interior already contains
 // its backdrop; only the antialiased contour and shadow have partial alpha.
 func Render(source image.Image, bounds, body image.Rectangle, radius float64, dpi int, theme Theme) *image.RGBA {
+	return render(source, bounds, body, radius, dpi, theme, false)
+}
+
+// RenderFrosted uses the theme's tint amount and a light blur without lens distortion.
+// Like Render, it composites the backdrop before presenting the native surface.
+func RenderFrosted(source image.Image, bounds, body image.Rectangle, radius float64, dpi int, theme Theme) *image.RGBA {
+	theme.Tint = color.NRGBA{255, 255, 255, 255}
+	theme.TintAmount = math.Max(0, math.Min(1, theme.TintAmount))
+	return render(source, bounds, body, radius, dpi, theme, true)
+}
+
+func render(source image.Image, bounds, body image.Rectangle, radius float64, dpi int, theme Theme, frosted bool) *image.RGBA {
 	back := Crop(source, bounds.Inset(-Support(dpi)))
+	blurRadius := Scale(3, dpi)
+	if frosted {
+		// Three radius-2 box passes approximate a 2px Gaussian blur at 96 DPI.
+		blurRadius = Scale(2, dpi)
+	}
 	for i := 0; i < 3; i++ {
-		back = blur(back, Scale(3, dpi))
+		back = blur(back, blurRadius)
 	}
 	out := image.NewRGBA(image.Rectangle{Max: bounds.Size()})
 	scale := float64(max(dpi, 96)) / 96
@@ -84,14 +101,27 @@ func Render(source image.Image, bounds, body image.Rectangle, radius float64, dp
 			}
 			// A curved lens around the contour displaces the frozen background.
 			// Keep the center clear so the material retains the scene's colors.
-			band := math.Exp(-math.Abs(d)/(4*scale)) * 4.5 * scale
+			depth := math.Abs(d) / scale
+			band := math.Exp(-depth/7) * 11 * scale
 			nx := Distance(fx+.5, fy, body, radius) - Distance(fx-.5, fy, body, radius)
 			ny := Distance(fx, fy+.5, body, radius) - Distance(fx, fy-.5, body, radius)
-			sx, sy := bounds.Min.X+x+int(math.Round(nx*band)), bounds.Min.Y+y+int(math.Round(ny*band))
+			// Two smooth waves approximate low-frequency liquid distortion.
+			// Fade them toward the center to preserve content readability.
+			wave := math.Exp(-depth/16) * 2 * scale
+			wx := math.Sin(fy/(31*scale)+fx/(67*scale)) * wave
+			wy := math.Sin(fx/(37*scale)-fy/(53*scale)) * wave
+			sx, sy := bounds.Min.X+x+int(math.Round(nx*band+wx)), bounds.Min.Y+y+int(math.Round(ny*band+wy))
 			c := back.RGBAAt(sx, sy)
-			highlight := math.Exp(-math.Abs(d)/(1.1*scale)) * (.35 + .4*math.Max(0, -ny))
+			highlight := math.Exp(-depth/1.1) * (.38 + .42*math.Max(0, -ny))
+			innerShade := .10 * math.Exp(-math.Pow((depth-3)/2.5, 2)) * math.Max(0, ny)
+			if frosted {
+				c = back.RGBAAt(bounds.Min.X+x, bounds.Min.Y+y)
+				highlight = .12 * math.Exp(-depth/0.7)
+				innerShade = 0
+			}
 			mix := func(v, t uint8) uint8 {
 				f := float64(v)*(1-theme.TintAmount) + float64(t)*theme.TintAmount
+				f *= 1 - innerShade
 				f += (255 - f) * highlight
 				return uint8(math.Min(255, f) * coverage)
 			}

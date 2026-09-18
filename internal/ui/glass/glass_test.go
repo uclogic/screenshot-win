@@ -93,6 +93,21 @@ func TestBlurPreservesConstant(t *testing.T) {
 	}
 }
 
+func TestFrostedTintControlsBackgroundVisibility(t *testing.T) {
+	bounds := image.Rect(0, 0, 160, 64)
+	body := bounds.Inset(8)
+	for _, amount := range []float64{0, .35, .65, 1} {
+		theme := Light
+		theme.TintAmount = amount
+		frame := RenderFrosted(image.NewUniform(color.RGBA{0, 0, 0, 255}), bounds, body, 12, 96, theme)
+		pixel := frame.RGBAAt(80, 32)
+		want := uint8(255 * amount)
+		if pixel.R != want || pixel.G != want || pixel.B != want || pixel.A != 255 {
+			t.Fatalf("tint %v: got %v, want RGB %d with opaque composited interior", amount, pixel, want)
+		}
+	}
+}
+
 // Optional renderer-only preview for review on machines without a Windows GUI.
 func TestMaterialPreview(t *testing.T) {
 	path := os.Getenv("GLASS_PREVIEW")

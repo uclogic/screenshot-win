@@ -113,6 +113,8 @@ Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, 
 
 Pins appear near the mouse pointer and use the existing drag, zoom, and close controls. While a capture or clipboard-pin operation is running, additional triggers are ignored. Applying settings takes effect immediately; older settings files keep clipboard pinning disabled until configured.
 
+In Settings → General, **Toolbar transparency (%)** accepts 0–100 (higher means more transparent), with a default of 60. It changes the toolbar background while keeping icons opaque, and applies to the next capture. You can also edit `general.toolbar_transparency` in the TOML file and restart the app. Older files without this key use 60.
+
 The generated file has this shape:
 
 ```toml
@@ -120,6 +122,7 @@ The generated file has this shape:
 hotkey = 'Alt+Shift+A'
 pin_hotkey = ''
 language = 'en'
+toolbar_transparency = 60
 candidate_mode = 'minimal_rectangle'
 
 [long_capture]
@@ -142,6 +145,18 @@ Set `general.candidate_mode` in `screenshot-win.toml` to choose a candidate mode
 Move the mouse to preview the smallest detected rectangle containing it. Candidates must be at least 100×80 physical pixels. While detection runs, or if no candidate contains the pointer, the preview uses the entire current monitor, including the taskbar. Click to confirm, or hold and drag to select manually; manual selections have no minimum size. Esc or right-click cancels. Detection and the final screenshot use the same frozen frame. After selection, use the toolbar to save, copy, annotate, pin, or start a scrolling capture.
 
 During scrolling capture, scroll slowly. The default `legacy` mode captures downward scrolling; select `bidirectional` in Settings to capture in both directions. Use the capture toolbar to save, copy, edit, pin, or cancel. Settings changes apply to the next capture.
+
+### Rectangle annotations
+
+Click a rectangle's border to select and move it. Selected rectangles show hollow,
+DPI-scaled resize handles; their borders leave gaps around the handles so the
+underlying image remains visible. Small rectangles hide the corresponding midpoint
+handles. Resizing stops at the opposite edge and a 16-DIP minimum; existing smaller
+rectangles can still be enlarged. New rectangles smaller than the minimum are discarded.
+Click blank space to deselect, or drag there with a drawing tool to add an annotation.
+Color and line-width controls edit the selected annotation; switching drawing tools
+deselects it. Saved, copied, and pinned images always contain complete rectangle
+borders without handles. The screenshot capture region stays fixed.
 
 ### Rectangle detector debugging
 

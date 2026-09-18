@@ -54,6 +54,33 @@ func TestDefaultPreferencesAreValid(t *testing.T) {
 	}
 }
 
+func TestToolbarTransparencyPreferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := os.WriteFile(path, []byte("[general]\nlanguage='en'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	value, err := loadPreferences(path)
+	if err != nil || value.General.ToolbarTransparency != 60 {
+		t.Fatalf("legacy settings: %+v, %v", value, err)
+	}
+	for _, percent := range []int{0, 35, 65, 100} {
+		value.General.ToolbarTransparency = percent
+		if err := savePreferences(path, value); err != nil {
+			t.Fatal(err)
+		}
+		got, err := loadPreferences(path)
+		if err != nil || got.General.ToolbarTransparency != percent {
+			t.Fatalf("transparency %d: %+v, %v", percent, got, err)
+		}
+	}
+	for _, percent := range []int{-1, 101} {
+		value.General.ToolbarTransparency = percent
+		if value.Validate() == nil {
+			t.Fatalf("accepted transparency %d", percent)
+		}
+	}
+}
+
 func TestPreferencesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), settingsFileName)
 	want := defaultPreferences()

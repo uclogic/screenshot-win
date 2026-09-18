@@ -134,11 +134,11 @@ func TestFrozenSelectionHandlesAndZoomTolerance(t *testing.T) {
 	state := &frozenState{viewport: editor.Viewport{Scale: 1, Offset: image.Pt(10, 15)}, dpi: 96}
 	rectangle := editor.Annotation{Tool: editor.ToolRectangle, Start: image.Pt(20, 30), End: image.Pt(80, 70), Style: editor.DefaultStyle()}
 	handles := state.handles(rectangle)
-	if len(handles) != 8 {
-		t.Fatalf("rectangle handles = %d, want 8", len(handles))
+	if handles.count != 8 {
+		t.Fatalf("rectangle handles = %d, want 8", handles.count)
 	}
-	if handles[0].point != image.Pt(30, 45) || handles[4].point != image.Pt(90, 85) {
-		t.Fatalf("corner handles = %v / %v", handles[0].point, handles[4].point)
+	if handles.items[0].point != image.Pt(30, 45) || handles.items[4].point != image.Pt(90, 85) {
+		t.Fatalf("corner handles = %v / %v", handles.items[0].point, handles.items[4].point)
 	}
 	state.viewport.Scale = .5
 	zoomedOut := state.hitTolerance()

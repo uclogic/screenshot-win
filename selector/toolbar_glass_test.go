@@ -22,9 +22,9 @@ func TestGlassLayoutHitRegions(t *testing.T) {
 					t.Fatal("button outside surface")
 				}
 			}
-			for _, p := range []image.Point{{0, 0}, {glass.Margin(dpi), glass.Margin(dpi)}, {size.X - 1, size.Y / 2}, {size.X / 2, size.Y - 1}} {
+			for _, p := range []image.Point{{0, 0}, {glass.Margin(dpi) - 1, size.Y / 2}, {size.X - 1, size.Y / 2}, {size.X / 2, size.Y - 1}} {
 				if _, ok := glassToolbarActionAt(p, count, dpi); ok {
-					t.Fatalf("shadow/padding accepted: %v", p)
+					t.Fatalf("shadow accepted: %v", p)
 				}
 			}
 		}
