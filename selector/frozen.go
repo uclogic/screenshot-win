@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"sync"
 
 	"screenshot-win/editor"
@@ -20,6 +21,8 @@ type Frozen struct {
 	updateStyle func(context.Context, editor.StyleChange) (bool, error)
 	styles      <-chan editor.Style
 	rendered    func() image.Image
+	capture     func() (image.Rectangle, image.Image)
+	regions     <-chan image.Rectangle
 	background  ToolbarBackground
 }
 
@@ -44,11 +47,59 @@ func (frozen *Frozen) Rendered() image.Image {
 	}
 	return frozen.rendered()
 }
+
+// Capture returns the current virtual-desktop region and the edited image
+// cropped to that region. The returned image has zero-based bounds.
+func (frozen *Frozen) Capture() (image.Rectangle, image.Image) {
+	if frozen == nil {
+		return image.Rectangle{}, nil
+	}
+	if frozen.capture != nil {
+		return frozen.capture()
+	}
+	return image.Rectangle{}, frozen.Rendered()
+}
+
+// RegionChanges reports committed and in-progress capture-region changes.
+// The channel is closed with the frozen overlay.
+func (frozen *Frozen) RegionChanges() <-chan image.Rectangle {
+	if frozen == nil {
+		return nil
+	}
+	return frozen.regions
+}
 func (frozen *Frozen) AnnotateContext(ctx context.Context, tool editor.Tool, style editor.Style) error {
 	if frozen == nil || frozen.annotate == nil {
 		return fmt.Errorf("frozen overlay cannot annotate")
 	}
 	return frozen.annotate(ctx, tool, style)
+}
+
+type croppedImage struct {
+	source image.Image
+	area   image.Rectangle
+}
+
+func cropImage(source image.Image, area image.Rectangle) image.Image {
+	if source == nil {
+		return nil
+	}
+	area = area.Intersect(source.Bounds())
+	if area.Empty() {
+		return nil
+	}
+	return croppedImage{source: source, area: area}
+}
+
+func (cropped croppedImage) ColorModel() color.Model { return cropped.source.ColorModel() }
+func (cropped croppedImage) Bounds() image.Rectangle {
+	return image.Rectangle{Max: cropped.area.Size()}
+}
+func (cropped croppedImage) At(x, y int) color.Color {
+	if !image.Pt(x, y).In(cropped.Bounds()) {
+		return color.NRGBA{}
+	}
+	return cropped.source.At(cropped.area.Min.X+x, cropped.area.Min.Y+y)
 }
 
 // SelectedStyles reports the full style whenever an annotation becomes

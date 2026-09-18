@@ -65,6 +65,24 @@ func TestRectangleSmallHandlesAndRoundHitRegions(t *testing.T) {
 	}
 }
 
+func TestRectangleAllHandlesLayoutKeepsEightOnSmallRegion(t *testing.T) {
+	layout := LayoutRectangleAllHandles(image.Pt(10, 20), image.Pt(26, 36), 96, 3)
+	if layout.Count != 8 {
+		t.Fatalf("handle count = %d, want 8", layout.Count)
+	}
+	want := map[TransformHandle]bool{
+		HandleRectangleNorthWest: true, HandleRectangleNorth: true, HandleRectangleNorthEast: true,
+		HandleRectangleEast: true, HandleRectangleSouthEast: true, HandleRectangleSouth: true,
+		HandleRectangleSouthWest: true, HandleRectangleWest: true,
+	}
+	for _, handle := range layout.Handles {
+		delete(want, handle.Kind)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing handles: %v", want)
+	}
+}
+
 func TestResizeRectangleDeltaAndConstraints(t *testing.T) {
 	a := Annotation{Tool: ToolRectangle, Start: image.Pt(20, 20), End: image.Pt(60, 60), Style: DefaultStyle()}
 	b := image.Rect(0, 0, 100, 100)

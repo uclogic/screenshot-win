@@ -61,6 +61,7 @@ type ActionToolbar struct {
 	events      <-chan ToolbarEvent
 	ready       func()
 	setStyle    func(editor.Style)
+	setRegion   func(image.Rectangle)
 	closeWindow func()
 	done        <-chan struct{}
 	resultError func() error
@@ -106,6 +107,14 @@ func (toolbar *ActionToolbar) NextAction(ctx context.Context) (Action, error) {
 func (toolbar *ActionToolbar) SetStyle(style editor.Style) {
 	if toolbar != nil && toolbar.setStyle != nil {
 		toolbar.setStyle(style)
+	}
+}
+
+// SetRegion moves the persistent toolbar to follow the current capture area.
+// It is safe to call from a region-notification goroutine.
+func (toolbar *ActionToolbar) SetRegion(region image.Rectangle) {
+	if toolbar != nil && toolbar.setRegion != nil && !region.Empty() {
+		toolbar.setRegion(region)
 	}
 }
 

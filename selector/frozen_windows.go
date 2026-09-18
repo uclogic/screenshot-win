@@ -120,6 +120,11 @@ type frozenTransform struct {
 	minimum          image.Point
 	rectanglePreview *editor.RectanglePreview
 }
+type frozenRegionTransform struct {
+	handle          editor.TransformHandle
+	original, draft image.Rectangle
+	anchor          image.Point
+}
 type frozenTextEdit struct {
 	hwnd, oldProcedure, font uintptr
 	id                       editor.AnnotationID
@@ -134,6 +139,10 @@ type frozenState struct {
 	*selectionState
 	source           image.Image
 	region           image.Rectangle
+	regionMu         sync.RWMutex
+	regionTransform  *frozenRegionTransform
+	regionUpdates    chan image.Rectangle
+	editableRegion   bool
 	document         *editor.Document
 	viewport         editor.Viewport
 	mu               sync.Mutex
@@ -170,14 +179,14 @@ func ShowFrozenDesktop(source image.Image, region image.Rectangle) (*Frozen, err
 	if source == nil || source.Bounds().Dx() != desktop.Dx() || source.Bounds().Dy() != desktop.Dy() {
 		return nil, fmt.Errorf("frozen desktop image size must be %dx%d", desktop.Dx(), desktop.Dy())
 	}
-	local := region.Sub(desktop.Min)
-	sub, ok := source.(interface {
-		SubImage(image.Rectangle) image.Image
-	})
-	if !ok {
-		return nil, fmt.Errorf("frozen desktop image does not support sub-images")
+	if region.Intersect(desktop).Empty() {
+		return nil, fmt.Errorf("capture region %v is outside virtual desktop %v", region, desktop)
 	}
-	return ShowFrozenContent(source, region, sub.SubImage(local))
+	document, err := editor.NewDocument(source)
+	if err != nil {
+		return nil, err
+	}
+	return showFrozenContent(source, region, document, true)
 }
 
 func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, content image.Image) (*Frozen, error) {
@@ -192,11 +201,17 @@ func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, conten
 	if err != nil {
 		return nil, err
 	}
+	return showFrozenContent(desktopSource, region, document, false)
+}
+
+func showFrozenContent(desktopSource image.Image, region image.Rectangle, document *editor.Document, editableRegion bool) (*Frozen, error) {
 	styleUpdates := make(chan *frozenStyleRequest, 1)
 	styleEvents := make(chan editor.Style, 1)
+	regionUpdates := make(chan image.Rectangle, 1)
 	started := make(chan frozenStart, 1)
 	done := make(chan struct{})
-	go runFrozenWindow(desktop, region, desktopSource, document, styleUpdates, styleEvents, started, done)
+	desktop := virtualDesktopBounds()
+	go runFrozenWindow(desktop, region, desktopSource, document, editableRegion, styleUpdates, styleEvents, regionUpdates, started, done)
 	result := <-started
 	if result.err != nil {
 		<-done
@@ -211,8 +226,13 @@ func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, conten
 		updateStyle: func(ctx context.Context, change editor.StyleChange) (bool, error) {
 			return state.updateSelectedStyleContext(ctx, change)
 		},
-		styles:   styleEvents,
-		rendered: document.Rendered,
+		styles:  styleEvents,
+		regions: regionUpdates,
+		rendered: func() image.Image {
+			_, rendered := state.capture()
+			return rendered
+		},
+		capture: state.capture,
 		background: func(bounds image.Rectangle) image.Image {
 			select {
 			case <-done:
@@ -239,11 +259,12 @@ func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, conten
 	}, nil
 }
 
-func runFrozenWindow(desktop, region image.Rectangle, source image.Image, document *editor.Document, styleUpdates chan *frozenStyleRequest, styleEvents chan editor.Style, started chan<- frozenStart, done chan<- struct{}) {
+func runFrozenWindow(desktop, region image.Rectangle, source image.Image, document *editor.Document, editableRegion bool, styleUpdates chan *frozenStyleRequest, styleEvents chan editor.Style, regionUpdates chan image.Rectangle, started chan<- frozenStart, done chan<- struct{}) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(done)
 	defer close(styleEvents)
+	defer close(regionUpdates)
 	instance, _, callErr := procGetModuleHandle.Call(0)
 	if instance == 0 {
 		started <- frozenStart{err: win32Error("GetModuleHandleW", callErr)}
@@ -268,9 +289,12 @@ func runFrozenWindow(desktop, region image.Rectangle, source image.Image, docume
 	defer procUnregisterClass.Call(uintptr(unsafe.Pointer(className)), instance)
 	selection := newSelectionState(desktop)
 	localRegion := region.Sub(desktop.Min)
-	viewport := editor.Fit(document.Bounds().Size(), localRegion.Size())
-	viewport.Offset = viewport.Offset.Add(localRegion.Min)
-	state := &frozenState{selectionState: selection, source: source, region: localRegion, document: document, viewport: viewport, styleUpdates: styleUpdates, styleEvents: styleEvents}
+	viewport := editor.Viewport{Scale: 1}
+	if !editableRegion {
+		viewport = editor.Fit(document.Bounds().Size(), localRegion.Size())
+		viewport.Offset = viewport.Offset.Add(localRegion.Min)
+	}
+	state := &frozenState{selectionState: selection, source: source, region: localRegion, document: document, viewport: viewport, editableRegion: editableRegion, styleUpdates: styleUpdates, styleEvents: styleEvents, regionUpdates: regionUpdates}
 	title, _ := syscall.UTF16PtrFromString("screenshot-win frozen desktop")
 	hwnd, _, callErr := procCreateWindowEx.Call(wsExTopmost|wsExToolWindow|wsExLayered, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), wsPopup, uintptr(desktop.Min.X), uintptr(desktop.Min.Y), uintptr(desktop.Dx()), uintptr(desktop.Dy()), 0, 0, instance, 0)
 	if hwnd == 0 {
@@ -394,6 +418,55 @@ func (state *frozenState) notifySelectedStyle(style editor.Style) {
 	}
 }
 
+func (state *frozenState) capture() (image.Rectangle, image.Image) {
+	state.regionMu.RLock()
+	region := state.region
+	state.regionMu.RUnlock()
+	rendered := state.document.Rendered()
+	if !state.editableRegion {
+		return region.Add(state.desktop.Min), rendered
+	}
+	return region.Add(state.desktop.Min), cropImage(rendered, region)
+}
+
+func (state *frozenState) setRegion(region image.Rectangle, publish bool) {
+	region = region.Intersect(state.client)
+	if region.Empty() || region == state.region {
+		return
+	}
+	state.regionMu.Lock()
+	state.region = region
+	state.regionMu.Unlock()
+	if publish {
+		state.publishRegion(region.Add(state.desktop.Min))
+	}
+}
+
+func (state *frozenState) publishRegion(region image.Rectangle) {
+	if state.regionUpdates == nil {
+		return
+	}
+	select {
+	case state.regionUpdates <- region:
+	default:
+		select {
+		case <-state.regionUpdates:
+		default:
+		}
+		select {
+		case state.regionUpdates <- region:
+		default:
+		}
+	}
+}
+
+func (state *frozenState) annotationCanvas() image.Rectangle {
+	if state.editableRegion {
+		return state.client
+	}
+	return state.region
+}
+
 func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	value, found := frozenStates.Load(hwnd)
 	if !found {
@@ -483,8 +556,18 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 	case wmLButtonDown:
 		state.finishTextEdit(true, false, false)
 		point := mousePoint(lParam)
+		if state.beginCaptureRegionResize(point) {
+			return 0
+		}
 		if state.beginSelectedHandle(point) {
 			return 0
+		}
+		request := state.activeRequest()
+		if state.editableRegion {
+			if annotation, hit := state.document.HitTest(state.imagePoint(point), state.hitTolerance()); hit {
+				state.selectForMove(annotation, point)
+				return 0
+			}
 		}
 		if !point.In(state.region) {
 			if previous, ok := state.clearSelectionForDrawing(); ok {
@@ -495,7 +578,6 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 			}
 			return 0
 		}
-		request := state.activeRequest()
 		if request != nil {
 			if state.beginSelectedTransform(point) {
 				return 0
@@ -522,6 +604,11 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		state.beginSelectionDrag(point)
 		return 0
 	case wmLButtonUp:
+		if state.regionTransform != nil {
+			state.updateCaptureRegionResize(mousePoint(lParam))
+			state.commitCaptureRegionResize()
+			return 0
+		}
 		request := state.activeRequest()
 		if request != nil && request.dragging {
 			point := mousePoint(lParam)
@@ -597,7 +684,7 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 			return 0
 		}
 		point := mousePoint(lParam)
-		if !point.In(state.region) {
+		if !point.In(state.region) && !state.editableRegion {
 			return 0
 		}
 		annotation, ok := state.document.HitTest(state.imagePoint(point), state.hitTolerance())
@@ -611,7 +698,10 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMButtonDown:
-		if state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
+		if state.editableRegion {
+			return 0
+		}
+		if state.regionTransform != nil || state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
 			return 0
 		}
 		state.finishTextEdit(true, false, false)
@@ -622,7 +712,9 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 	case wmMouseMove:
 		request := state.activeRequest()
 		point := mousePoint(lParam)
-		if state.panning {
+		if state.regionTransform != nil {
+			state.updateCaptureRegionResize(point)
+		} else if state.panning {
 			state.viewport.Pan(point.Sub(state.panLast))
 			state.panLast = point
 			state.renderOrCloseFrozen()
@@ -648,7 +740,10 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		}
 		return 0
 	case wmMouseWheel:
-		if state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
+		if state.editableRegion {
+			return 0
+		}
+		if state.regionTransform != nil || state.transform != nil || (state.activeRequest() != nil && state.activeRequest().dragging) {
 			return 0
 		}
 		state.finishTextEdit(true, false, false)
@@ -659,6 +754,10 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 		state.renderOrCloseFrozen()
 		return 0
 	case wmRButtonDown:
+		if state.cancelCaptureRegionResize() {
+			procReleaseCapture.Call()
+			return 0
+		}
 		state.removeSelectedOrEscape()
 		return 0
 	case wmKeyDown:
@@ -720,12 +819,16 @@ func nudgeAmount(shift bool) int {
 }
 
 func (state *frozenState) applyShortcut(command, amount int) {
+	if command == shortcutEscape && state.cancelCaptureRegionResize() {
+		procReleaseCapture.Call()
+		return
+	}
 	if command == shortcutEscape {
 		state.escape()
 		return
 	}
 	request := state.activeRequest()
-	if state.textEdit != nil || state.transform != nil || (request != nil && request.dragging) {
+	if state.textEdit != nil || state.regionTransform != nil || state.transform != nil || (request != nil && request.dragging) {
 		return
 	}
 	switch command {
@@ -1197,6 +1300,11 @@ func (state *frozenState) hitTolerance() float64 {
 }
 
 func (state *frozenState) cursorAt(point image.Point) int {
+	if state.editableRegion {
+		if handle, hit := state.captureRegionLayout(state.region).Hit(point); hit {
+			return rectangleCursor(handle)
+		}
+	}
 	if state.selected != 0 {
 		if selected, ok := state.document.Get(state.selected); ok {
 			if handle, hit := state.handleAt(point, selected); hit {
@@ -1207,14 +1315,14 @@ func (state *frozenState) cursorAt(point image.Point) int {
 			}
 		}
 	}
-	if point.In(state.region) {
+	if point.In(state.region) || state.editableRegion {
 		if annotation, ok := state.document.HitTest(state.imagePoint(point), state.hitTolerance()); ok {
 			if annotation.Tool == editor.ToolText {
 				return idcIBeam
 			}
 			return idcSizeAll
 		}
-		if state.activeRequest() != nil {
+		if point.In(state.region) && state.activeRequest() != nil {
 			return idcCross
 		}
 	}
@@ -1222,9 +1330,7 @@ func (state *frozenState) cursorAt(point image.Point) int {
 }
 
 func (state *frozenState) updateCursor(point image.Point) {
-	if cursor, _, _ := procLoadCursor.Call(0, uintptr(state.cursorAt(point))); cursor != 0 {
-		procFrozenSetCursor.Call(cursor)
-	}
+	state.setCursor(state.cursorAt(point))
 }
 
 func abs(value int) int {
@@ -1248,8 +1354,9 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	local := state.viewport.ImageToScreen(start)
 	// Keep the glyph origin at the clicked image coordinate, including at edges.
 	// The editor paints the actual document preview over its screenshot backdrop.
-	width := max(1, state.region.Max.X-local.X)
-	height := max(1, min(state.region.Max.Y-local.Y, screenFontHeight*2+4))
+	canvas := state.annotationCanvas()
+	width := max(1, canvas.Max.X-local.X)
+	height := max(1, min(canvas.Max.Y-local.Y, screenFontHeight*2+4))
 	x, y := local.X+state.desktop.Min.X, local.Y+state.desktop.Min.Y
 	edit, _, callErr := procCreateWindowEx.Call(
 		wsExTopmost|wsExToolWindow, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(characters)),
@@ -1541,7 +1648,7 @@ func (state *frozenState) renderTransform(transform *frozenTransform) error {
 	if transform.draft.Tool == editor.ToolArrow || transform.draft.Tool == editor.ToolRectangle {
 		return state.renderFastVectorTransform(transform)
 	}
-	dirty := state.selectionScreenBounds(transform.previous).Union(state.selectionScreenBounds(transform.draft)).Intersect(state.region)
+	dirty := state.selectionScreenBounds(transform.previous).Union(state.selectionScreenBounds(transform.draft)).Intersect(state.annotationCanvas())
 	if dirty.Empty() {
 		return nil
 	}
@@ -1549,7 +1656,7 @@ func (state *frozenState) renderTransform(transform *frozenTransform) error {
 	view := editor.RenderViewport(rendered, state.viewport, dirty)
 	state.copyViewport(view, dirty)
 	state.drawSelectionOverlay(transform.draft)
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+	state.drawCaptureChrome()
 	return state.present()
 }
 
@@ -1568,7 +1675,7 @@ func (state *frozenState) renderFastVectorTransform(transform *frozenTransform) 
 	state.restoreDraftPixels()
 	state.drawFastVector(transform.draft)
 	state.drawTrackedSelectionOverlay(transform.draft)
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+	state.drawCaptureChrome()
 	return state.present()
 }
 
@@ -1586,19 +1693,19 @@ func (state *frozenState) clearSelectionOverlay(annotation editor.Annotation) er
 		preview := state.document.NewRectanglePreview(0)
 		preview.Update(annotation, state.viewport, state.dpi)
 		state.paintRectangleFootprint(annotation, preview)
-		drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+		state.drawCaptureChrome()
 		return nil
 	}
 	if annotation.Tool == editor.ToolArrow || annotation.Tool == editor.ToolRectangle {
 		state.restoreVectorSelectionPixels(annotation, state.document.Rendered())
 	} else {
-		dirty := state.selectionScreenBounds(annotation).Intersect(state.region)
+		dirty := state.selectionScreenBounds(annotation).Intersect(state.annotationCanvas())
 		if !dirty.Empty() {
 			view := editor.RenderViewport(state.document.Rendered(), state.viewport, dirty)
 			state.copyViewport(view, dirty)
 		}
 	}
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+	state.drawCaptureChrome()
 	return nil
 }
 
@@ -1645,7 +1752,7 @@ func (state *frozenState) restoreVectorSelectionPixels(annotation editor.Annotat
 }
 
 func (state *frozenState) restoreVectorBasePixel(base image.Image, point image.Point, seen map[int]struct{}) {
-	if !point.In(state.region) {
+	if !point.In(state.annotationCanvas()) {
 		return
 	}
 	index := (point.Y*state.client.Dx() + point.X) * 4
@@ -1696,7 +1803,7 @@ func (state *frozenState) drawCommittedVector(annotation editor.Annotation) {
 		state.drawSelectionOverlay(annotation)
 	}
 	state.draftPixels = nil
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
+	state.drawCaptureChrome()
 }
 
 func screenArrowHead(start, end image.Point, width, scale float64) (image.Point, image.Point, bool) {
@@ -1718,7 +1825,7 @@ func (state *frozenState) drawTrackedSelectionOverlay(annotation editor.Annotati
 		seen[pixel.index] = struct{}{}
 	}
 	track := func(point image.Point) {
-		if !point.In(state.region) {
+		if !point.In(state.annotationCanvas()) {
 			return
 		}
 		index := (point.Y*state.client.Dx() + point.X) * 4
@@ -1831,7 +1938,7 @@ func (state *frozenState) drawDraftLine(start, end image.Point, thickness float6
 	top, bottom := min(start.Y, end.Y)-padding, max(start.Y, end.Y)+padding
 	for y := top; y <= bottom; y++ {
 		for x := left; x <= right; x++ {
-			if !image.Pt(x, y).In(state.region) {
+			if !image.Pt(x, y).In(state.annotationCanvas()) {
 				continue
 			}
 			coverage := math.Max(0, math.Min(1, radius+.5-draftDistanceToSegment(image.Pt(x, y), start, end)))
@@ -1886,10 +1993,19 @@ func (state *frozenState) renderFrozenDesktop() error {
 		annotation := editor.Annotation{Tool: request.tool, Start: request.start, End: request.current, Style: request.style}
 		rendered = state.document.RenderedPreview(0, &annotation)
 	}
-	view := editor.RenderViewport(rendered, state.viewport, state.region)
-	state.copyViewport(view, state.region)
+	if state.editableRegion {
+		for _, annotation := range state.previewAnnotations(request) {
+			dirty := state.selectionScreenBounds(annotation).Intersect(state.client)
+			if dirty.Empty() {
+				continue
+			}
+			state.copyViewport(editor.RenderViewport(rendered, state.viewport, dirty), dirty)
+		}
+	} else {
+		canvas := state.annotationCanvas()
+		state.copyViewport(editor.RenderViewport(rendered, state.viewport, canvas), canvas)
+	}
 	state.draftPixels = nil
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	if state.transform != nil {
 		state.drawSelectionOverlay(state.transform.draft)
 	} else if state.selected != 0 && state.textEdit == nil {
@@ -1897,7 +2013,33 @@ func (state *frozenState) renderFrozenDesktop() error {
 			state.drawSelectionOverlay(annotation)
 		}
 	}
+	state.drawCaptureChrome()
 	return state.present()
+}
+
+func (state *frozenState) previewAnnotations(request *frozenAnnotationRequest) []editor.Annotation {
+	annotations := state.document.Annotations()
+	if state.textEdit != nil && state.textEdit.id != 0 {
+		filtered := annotations[:0]
+		for _, annotation := range annotations {
+			if annotation.ID != state.textEdit.id {
+				filtered = append(filtered, annotation)
+			}
+		}
+		annotations = filtered
+	}
+	if state.transform != nil {
+		for index := range annotations {
+			if annotations[index].ID == state.transform.id {
+				annotations[index] = state.transform.draft
+				break
+			}
+		}
+	}
+	if request != nil && request.dragging && request.drawing && request.current != request.start {
+		annotations = append(annotations, editor.Annotation{Tool: request.tool, Start: request.start, End: request.current, Style: request.style})
+	}
+	return annotations
 }
 
 func (state *frozenState) selectionScreenBounds(annotation editor.Annotation) image.Rectangle {
@@ -1983,7 +2125,7 @@ func (state *frozenState) drawRoundHandle(center image.Point, red, green, blue b
 }
 
 func (state *frozenState) setOverlayPixel(point image.Point, red, green, blue byte) {
-	if !point.In(state.region) {
+	if !point.In(state.annotationCanvas()) {
 		return
 	}
 	index := (point.Y*state.client.Dx() + point.X) * 4
@@ -2007,9 +2149,14 @@ func (state *frozenState) copyViewport(view *image.NRGBA, destination image.Rect
 // remains usable when capture is stolen or Windows enters a modal operation.
 func (state *frozenState) interruptPointerGesture() bool {
 	request := state.activeRequest()
-	changed := state.panning || state.transform != nil || (request != nil && request.dragging)
+	changed := state.regionTransform != nil || state.panning || state.transform != nil || (request != nil && request.dragging)
 	if !changed {
 		return false
+	}
+	if state.regionTransform != nil {
+		original := state.regionTransform.original
+		state.regionTransform = nil
+		state.setRegion(original, true)
 	}
 	state.panning = false
 	state.transform = nil

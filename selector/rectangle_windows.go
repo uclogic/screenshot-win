@@ -95,7 +95,7 @@ func (state *frozenState) paintRectangleFootprint(a editor.Annotation, preview *
 			for x := strip.Min.X; x < strip.Max.X; x++ {
 				p := image.Pt(x, y)
 				var c color.NRGBA
-				if p.In(state.region) {
+				if p.In(state.annotationCanvas()) {
 					c = preview.ScreenColor(p)
 				} else {
 					c = state.desktopColor(p)
@@ -170,8 +170,8 @@ func (state *frozenState) paintRectangleTransform(t *frozenTransform) {
 	t.rectanglePreview.Update(t.draft, state.viewport, state.dpi)
 	state.paintRectangleFootprint(t.previous, t.rectanglePreview)
 	state.paintRectangleFootprint(t.draft, t.rectanglePreview)
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	state.drawRectangleHandles(t.draft)
+	state.drawCaptureChrome()
 	t.fastPrepared = true
 }
 
@@ -181,8 +181,8 @@ func (state *frozenState) drawSelectedRectangle(a editor.Annotation) {
 		preview.Update(a, state.viewport, state.dpi)
 		state.paintRectangleFootprint(a, preview)
 	}
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	state.drawRectangleHandles(a)
+	state.drawCaptureChrome()
 }
 
 // vectorPixelIndex reuses the high-water capacity across drawing frames.

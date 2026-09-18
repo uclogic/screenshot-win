@@ -24,12 +24,23 @@ type RectangleLayout struct {
 }
 
 func LayoutRectangle(start, end image.Point, dpi int, borderWidth float64) RectangleLayout {
+	return layoutRectangle(start, end, dpi, borderWidth, false)
+}
+
+// LayoutRectangleAllHandles returns the same editing geometry while retaining
+// all four edge handles for small rectangles. Capture regions use it so their
+// eight resize affordances remain continuously available.
+func LayoutRectangleAllHandles(start, end image.Point, dpi int, borderWidth float64) RectangleLayout {
+	return layoutRectangle(start, end, dpi, borderWidth, true)
+}
+
+func layoutRectangle(start, end image.Point, dpi int, borderWidth float64, allHandles bool) RectangleLayout {
 	scale := float64(max(96, dpi)) / 96
 	l := RectangleLayout{Radius: 4.5 * scale, Stroke: 1.5 * scale, HitRadius: 8 * scale}
 	x0, x1 := float64(min(start.X, end.X)), float64(max(start.X, end.X))
 	y0, y1 := float64(min(start.Y, end.Y)), float64(max(start.Y, end.Y))
 	cx, cy := (x0+x1)/2, (y0+y1)/2
-	wide, tall := x1-x0 >= 32*scale, y1-y0 >= 32*scale
+	wide, tall := allHandles || x1-x0 >= 32*scale, allHandles || y1-y0 >= 32*scale
 	add := func(kind TransformHandle, x, y float64) {
 		l.Handles[l.Count] = RectangleHandle{kind, ScreenPoint{x, y}}
 		l.Count++

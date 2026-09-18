@@ -161,6 +161,24 @@ func TestRunActionMenuExportsRenderedAnnotations(t *testing.T) {
 	}
 }
 
+func TestRunActionMenuUsesCurrentCaptureRegionAndImage(t *testing.T) {
+	initial := image.Rect(10, 20, 110, 80)
+	current := image.Rect(-30, 40, 170, 140)
+	output := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	var copied image.Image
+	result, err := runActionMenu(initial, image.NewRGBA(image.Rect(0, 0, 100, 60)), interactiveOperations{
+		showToolbar: func(image.Rectangle) (selector.Action, error) { return selector.ActionCopy, nil },
+		capture:     func() (image.Rectangle, image.Image) { return current, output },
+		copy:        func(source image.Image) error { copied = source; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != output || result.region != current || result.size != output.Bounds().Size() {
+		t.Fatalf("result=%+v copied=%T", result, copied)
+	}
+}
+
 func TestRunActionMenuAppliesExplicitStyleAndUsesItForNextAnnotation(t *testing.T) {
 	style := editor.DefaultStyle()
 	style.Color = editor.PresetColors()[2]

@@ -20,15 +20,16 @@ import (
 )
 
 const (
-	wmPaint        = 0x000F
-	wmEraseBkgnd   = 0x0014
-	wmMouseLeave   = 0x02A3
-	wmUser         = 0x0400
-	wmToolbarReady = wmUser + 97
-	wmToolbarStyle = wmUser + 98
-	wmToolbarPin   = wmUser + 102
-	wmToolbarRaise = wmUser + 108
-	wmActivate     = 0x0006
+	wmPaint         = 0x000F
+	wmEraseBkgnd    = 0x0014
+	wmMouseLeave    = 0x02A3
+	wmUser          = 0x0400
+	wmToolbarReady  = wmUser + 97
+	wmToolbarStyle  = wmUser + 98
+	wmToolbarPin    = wmUser + 102
+	wmToolbarRaise  = wmUser + 108
+	wmToolbarRegion = wmUser + 109
+	wmActivate      = 0x0006
 
 	monitorDefaultToNearest = 2
 	colorWindow             = 5
@@ -162,6 +163,9 @@ type toolbarState struct {
 	style          editor.Style
 	pendingStyle   editor.Style
 	styleMu        sync.Mutex
+	pendingRegion  image.Rectangle
+	regionMu       sync.Mutex
+	regionPosted   bool
 	tooltip        uintptr
 	instance       uintptr
 	workArea       image.Rectangle
@@ -234,6 +238,7 @@ func showToolbarContext(ctx context.Context, region image.Rectangle, actions []A
 		window: result.hwnd, events: events, done: done,
 		ready:       func() { procPostMessage.Call(result.hwnd, wmToolbarReady, 0, 0) },
 		setStyle:    func(style editor.Style) { state.queueStyle(style) },
+		setRegion:   func(region image.Rectangle) { state.queueRegion(region) },
 		closeWindow: func() { procPostMessage.Call(result.hwnd, wmClose, 0, 0) },
 		resultError: func() error { return state.renderErr },
 	}, nil
@@ -516,7 +521,7 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 		return 3 // MA_NOACTIVATE
 	}
 	switch message {
-	case wmMouseMove, wmMouseLeave, wmLButtonDown, wmLButtonUp, wmToolbarReady, wmToolbarStyle, wmToolbarPin, wmKeyDown, wmRButtonDown, 0x0215:
+	case wmMouseMove, wmMouseLeave, wmLButtonDown, wmLButtonUp, wmToolbarReady, wmToolbarStyle, wmToolbarRegion, wmToolbarPin, wmKeyDown, wmRButtonDown, 0x0215:
 		state.refreshMotion()
 		defer state.refreshMotion()
 	}
@@ -599,6 +604,9 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 		return 0
 	case wmToolbarStyle:
 		state.applyQueuedStyle()
+		return 0
+	case wmToolbarRegion:
+		state.applyQueuedRegion()
 		return 0
 	case wmMouseMove:
 		point := mousePoint(lParam)
@@ -796,6 +804,41 @@ func (state *toolbarState) queueStyle(style editor.Style) {
 	state.pendingStyle = style
 	state.styleMu.Unlock()
 	procPostMessage.Call(state.hwnd, wmToolbarStyle, 0, 0)
+}
+
+func (state *toolbarState) queueRegion(region image.Rectangle) {
+	state.regionMu.Lock()
+	state.pendingRegion = region
+	if state.regionPosted {
+		state.regionMu.Unlock()
+		return
+	}
+	state.regionPosted = true
+	state.regionMu.Unlock()
+	procPostMessage.Call(state.hwnd, wmToolbarRegion, 0, 0)
+}
+
+func (state *toolbarState) applyQueuedRegion() {
+	state.regionMu.Lock()
+	region := state.pendingRegion
+	state.regionPosted = false
+	state.regionMu.Unlock()
+	if region.Empty() || region == state.region {
+		return
+	}
+	workArea, err := monitorWorkArea(region)
+	if err != nil {
+		state.renderErr = err
+		return
+	}
+	state.closeStylePanel()
+	state.region = region
+	state.workArea = workArea
+	state.windowBounds = toolbarBounds(region, workArea, state.clientSize)
+	state.glassWindow.dirty = true
+	bounds := state.windowBounds
+	procSetWindowPos.Call(state.hwnd, hwndTopmost, uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()), swpNoActivate)
+	procInvalidateRect.Call(state.hwnd, 0, 0)
 }
 
 func (state *toolbarState) applyQueuedStyle() {

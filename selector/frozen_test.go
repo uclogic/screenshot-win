@@ -28,3 +28,15 @@ func TestCopyImageToBGRARejectsMismatchedBuffer(t *testing.T) {
 		t.Fatal("copyImageToBGRA() accepted a short buffer")
 	}
 }
+
+func TestCropImageUsesZeroBasedBoundsAndSourceOffset(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 8, 6))
+	source.SetRGBA(3, 2, color.RGBA{R: 11, G: 22, B: 33, A: 255})
+	cropped := cropImage(source, image.Rect(3, 2, 7, 5))
+	if cropped == nil || cropped.Bounds() != image.Rect(0, 0, 4, 3) {
+		t.Fatalf("cropped bounds = %v", cropped.Bounds())
+	}
+	if got := color.RGBAModel.Convert(cropped.At(0, 0)).(color.RGBA); got != (color.RGBA{R: 11, G: 22, B: 33, A: 255}) {
+		t.Fatalf("cropped origin = %v", got)
+	}
+}

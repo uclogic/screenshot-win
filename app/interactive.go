@@ -23,11 +23,14 @@ type interactiveOperations struct {
 	annotate            func(editor.Tool, editor.Style) error
 	updateSelectedStyle func(context.Context, editor.StyleChange) (bool, error)
 	rendered            func() image.Image
+	capture             func() (image.Rectangle, image.Image)
 }
 
 type actionResult struct {
 	action selector.Action
 	path   string
+	region image.Rectangle
+	size   image.Point
 }
 
 func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
@@ -91,6 +94,8 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 	}
 	stopStyleSync := syncSelectedStyles(ctx, toolbar, frozen.SelectedStyles())
 	defer stopStyleSync()
+	stopRegionSync := syncCaptureRegions(ctx, toolbar, frozen.RegionChanges())
+	defer stopRegionSync()
 
 	result, err := runActionMenu(region, snapshot, interactiveOperations{
 		showToolbarEvent: func(region image.Rectangle) (selector.ToolbarEvent, error) {
@@ -107,6 +112,7 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 			return frozen.UpdateSelectedStyleContext(updateCtx, change)
 		},
 		rendered: frozen.Rendered,
+		capture:  frozen.Capture,
 		now:      runner.runtime.Now,
 		showError: func(err error) {
 			fmt.Fprintln(runner.runtime.Stderr, "screenshot-win:", err)
@@ -125,18 +131,22 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 	}
 	switch result.action {
 	case selector.ActionSave:
-		fmt.Fprintf(runner.runtime.Stdout, "已保存 %s（%d × %d）\n", result.path, snapshot.Bounds().Dx(), snapshot.Bounds().Dy())
+		fmt.Fprintf(runner.runtime.Stdout, "已保存 %s（%d × %d）\n", result.path, result.size.X, result.size.Y)
 		return nil
 	case selector.ActionCopy:
-		fmt.Fprintf(runner.runtime.Stdout, "已复制截图到剪贴板（%d × %d）\n", snapshot.Bounds().Dx(), snapshot.Bounds().Dy())
+		fmt.Fprintf(runner.runtime.Stdout, "已复制截图到剪贴板（%d × %d）\n", result.size.X, result.size.Y)
 		return nil
 	case selector.ActionScroll:
+		if !result.region.Empty() {
+			config.X, config.Y = result.region.Min.X, result.region.Min.Y
+			config.Width, config.Height = result.region.Dx(), result.region.Dy()
+		}
 		if err := session.Transition(StateFrozen, StateScrolling); err != nil {
 			return err
 		}
 		return runner.runLongCapture(ctx, config, session)
 	case selector.ActionPin:
-		fmt.Fprintf(runner.runtime.Stdout, "已将截图贴到桌面（%d × %d）\n", snapshot.Bounds().Dx(), snapshot.Bounds().Dy())
+		fmt.Fprintf(runner.runtime.Stdout, "已将截图贴到桌面（%d × %d）\n", result.size.X, result.size.Y)
 		return nil
 	default:
 		fmt.Fprintln(runner.runtime.Stdout, "已取消截图。")
@@ -165,7 +175,7 @@ func runActionMenu(region image.Rectangle, snapshot image.Image, operations inte
 		}
 		switch action {
 		case selector.ActionSave:
-			output := currentEditedImage(snapshot, operations.rendered)
+			outputRegion, output := currentCapture(region, snapshot, operations)
 			path, selected, err := operations.choosePath(operations.now())
 			if err != nil {
 				operations.showError(err)
@@ -178,15 +188,17 @@ func runActionMenu(region image.Rectangle, snapshot image.Image, operations inte
 				operations.showError(err)
 				continue
 			}
-			return actionResult{action: action, path: path}, nil
+			return actionResult{action: action, path: path, region: outputRegion, size: output.Bounds().Size()}, nil
 		case selector.ActionCopy:
-			if err := operations.copy(currentEditedImage(snapshot, operations.rendered)); err != nil {
+			outputRegion, output := currentCapture(region, snapshot, operations)
+			if err := operations.copy(output); err != nil {
 				operations.showError(err)
 				continue
 			}
-			return actionResult{action: action}, nil
+			return actionResult{action: action, region: outputRegion, size: output.Bounds().Size()}, nil
 		case selector.ActionScroll:
-			return actionResult{action: action}, nil
+			outputRegion, output := currentCapture(region, snapshot, operations)
+			return actionResult{action: action, region: outputRegion, size: output.Bounds().Size()}, nil
 		case selector.ActionRectangle, selector.ActionArrow, selector.ActionText:
 			if operations.annotate == nil {
 				return actionResult{}, errorsMissingOperation("annotate image")
@@ -220,11 +232,12 @@ func runActionMenu(region image.Rectangle, snapshot image.Image, operations inte
 			if operations.pin == nil {
 				return actionResult{}, errorsMissingOperation("pin image")
 			}
-			if err := operations.pin(currentEditedImage(snapshot, operations.rendered), region.Min); err != nil {
+			outputRegion, output := currentCapture(region, snapshot, operations)
+			if err := operations.pin(output, outputRegion.Min); err != nil {
 				operations.showError(err)
 				continue
 			}
-			return actionResult{action: action}, nil
+			return actionResult{action: action, region: outputRegion, size: output.Bounds().Size()}, nil
 		default:
 			return actionResult{action: selector.ActionCancel}, nil
 		}
@@ -250,6 +263,36 @@ func syncSelectedStyles(ctx context.Context, toolbar *selector.ActionToolbar, st
 		}
 	}()
 	return cancel
+}
+
+func syncCaptureRegions(ctx context.Context, toolbar *selector.ActionToolbar, regions <-chan image.Rectangle) func() {
+	syncCtx, cancel := context.WithCancel(ctx)
+	if toolbar == nil || regions == nil {
+		return cancel
+	}
+	go func() {
+		for {
+			select {
+			case region, ok := <-regions:
+				if !ok {
+					return
+				}
+				toolbar.SetRegion(region)
+			case <-syncCtx.Done():
+				return
+			}
+		}
+	}()
+	return cancel
+}
+
+func currentCapture(region image.Rectangle, original image.Image, operations interactiveOperations) (image.Rectangle, image.Image) {
+	if operations.capture != nil {
+		if currentRegion, output := operations.capture(); output != nil && !currentRegion.Empty() {
+			return currentRegion, output
+		}
+	}
+	return region, currentEditedImage(original, operations.rendered)
 }
 
 func currentEditedImage(original image.Image, rendered func() image.Image) image.Image {
