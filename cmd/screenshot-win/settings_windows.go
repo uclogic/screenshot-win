@@ -24,7 +24,6 @@ const (
 	settingsIDPinHotkey       = 2004
 	settingsIDClearPinHotkey  = 2005
 	settingsIDClearHotkey     = 2006
-	settingsIDTransparency    = 2007
 	settingsIDLongCaptureMode = 2100
 	settingsIDInterval        = 2101
 	settingsIDMaxScroll       = 2102
@@ -340,10 +339,6 @@ func (state *settingsWindow) createControls() error {
 			state.addComboString(languageCombo, option.Name)
 		}
 		state.general = []uintptr{generalGroup, generalLabel, hotkey, clearCapture, pinLabel, pinHotkey, clearPin, generalHelp, languageLabel, languageCombo}
-		transparencyLabel := must(2306, "STATIC", localize(language, textToolbarTransparency), 0)
-		transparency := must(settingsIDTransparency, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll|settingsESNumber)
-		transparencyHelp := must(2307, "STATIC", localize(language, textToolbarTransparencyHelp), 0)
-		state.general = append(state.general, transparencyLabel, transparency, transparencyHelp)
 
 		captureGroup := must(2401, "BUTTON", localize(language, textScrollingMatching), settingsBSGroupBox)
 		modeLabel := must(2407, "STATIC", localize(language, textLongCaptureMode), 0)
@@ -405,9 +400,6 @@ func (state *settingsWindow) layout() {
 	move(2303, 194, 118, 432, 44)
 	move(2304, 194, 192, 92, 22)
 	move(settingsIDLanguage, 292, 188, 190, 120)
-	move(2306, 194, 240, 200, 22)
-	move(settingsIDTransparency, 404, 236, 78, 26)
-	move(2307, 194, 274, 432, 44)
 
 	move(2401, 174, 12, 476, 237)
 	move(2407, 194, 45, 160, 22)
@@ -441,7 +433,6 @@ func (state *settingsWindow) load(value preferences) {
 	}
 	procSettingsSendMessage.Call(state.controls[settingsIDLongCaptureMode], settingsCBSetCurrent, modeIndex, 0)
 	state.setText(settingsIDInterval, strconv.Itoa(value.LongCapture.IntervalMS))
-	state.setText(settingsIDTransparency, strconv.Itoa(value.General.ToolbarTransparency))
 	state.setText(settingsIDMaxScroll, strconv.FormatFloat(value.LongCapture.MaxScrollRatio, 'g', -1, 64))
 	state.setText(settingsIDMaxDifference, strconv.FormatFloat(value.LongCapture.MaxMeanDifference, 'g', -1, 64))
 	state.setText(settingsIDMinConfidence, strconv.FormatFloat(value.LongCapture.MinimumConfidence, 'g', -1, 64))
@@ -503,11 +494,6 @@ func (state *settingsWindow) apply() bool {
 
 func (state *settingsWindow) read() (preferences, uintptr, error) {
 	value := state.host.preferences
-	transparency, parseErr := state.readInt(settingsIDTransparency)
-	if parseErr != nil || transparency < 0 || transparency > 100 {
-		return value, state.controls[settingsIDTransparency], fmt.Errorf("%s 0–100", localize(value.General.Language, textToolbarTransparency))
-	}
-	value.General.ToolbarTransparency = transparency
 	languageIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBGetCurrent, 0, 0)
 	value.General.Language = languageEnglish
 	if int(languageIndex) < len(availableLanguages) {

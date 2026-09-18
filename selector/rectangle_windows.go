@@ -121,8 +121,10 @@ func (state *frozenState) desktopColor(p image.Point) color.NRGBA {
 }
 
 func (state *frozenState) drawRectangleHandles(a editor.Annotation) {
-	l := state.rectangleLayout(a)
-	outline := editor.DefaultStyle().Color
+	state.drawRectangleLayoutHandles(state.rectangleLayout(a), a.Style.Color)
+}
+
+func (state *frozenState) drawRectangleLayoutHandles(l editor.RectangleLayout, outline color.NRGBA) {
 	channels := [3]byte{outline.B, outline.G, outline.R}
 	// Paint each affected pixel once, including overlapping small-box handles.
 	margin := int(math.Ceil(l.Radius + l.Stroke/2 + .5))

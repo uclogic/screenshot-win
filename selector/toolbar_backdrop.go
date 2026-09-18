@@ -6,6 +6,7 @@ import "image"
 // thread. Each window owns its fetch; closing/resizing drops the old result.
 type backdropFetch struct {
 	result <-chan image.Image
+	bounds image.Rectangle
 }
 
 func (fetch *backdropFetch) start(source ToolbarBackground, bounds image.Rectangle, ready func()) bool {
@@ -14,6 +15,7 @@ func (fetch *backdropFetch) start(source ToolbarBackground, bounds image.Rectang
 	}
 	result := make(chan image.Image, 1)
 	fetch.result = result
+	fetch.bounds = bounds
 	go func() {
 		result <- source(bounds)
 		ready()

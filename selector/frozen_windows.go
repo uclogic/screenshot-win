@@ -1355,8 +1355,8 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	// Keep the glyph origin at the clicked image coordinate, including at edges.
 	// The editor paints the actual document preview over its screenshot backdrop.
 	canvas := state.annotationCanvas()
-	width := max(1, canvas.Max.X-local.X)
-	height := max(1, min(canvas.Max.Y-local.Y, screenFontHeight*2+4))
+	width := max(1, min(canvas.Max.X-local.X, 120))
+	height := max(1, min(canvas.Max.Y-local.Y, screenFontHeight+8))
 	x, y := local.X+state.desktop.Min.X, local.Y+state.desktop.Min.Y
 	edit, _, callErr := procCreateWindowEx.Call(
 		wsExTopmost|wsExToolWindow, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(characters)),
@@ -1383,12 +1383,15 @@ func (state *frozenState) beginTextEdit(id editor.AnnotationID, start image.Poin
 	}
 	textEdit.oldProcedure = oldProcedure
 	if font != 0 {
-		procSendMessage.Call(edit, wmSetFont, font, 1)
+		procSendMessage.Call(edit, wmSetFont, font, 0)
 	}
 	procSendMessage.Call(edit, 0x00D3, 3, 1) // EM_SETMARGINS: one-pixel glyph inset, no right margin.
 	procSendMessage.Call(edit, emSetSel, 0, ^uintptr(0))
+	state.resizeTextEditor()
 	state.renderOrCloseFrozen()
-	procShowWindow.Call(edit, 5)
+	procShowWindow.Call(edit, swShowNoActivate)
+	procInvalidateRect.Call(edit, 0, 0)
+	procUpdateWindow.Call(edit)
 	procSetForegroundWindow.Call(edit)
 	procSetFocus.Call(edit)
 	return nil
@@ -1406,6 +1409,14 @@ func frozenTextWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uint
 		return 0
 	}
 	switch message {
+	case wmActivate:
+		// Activating this owned popup can raise the fullscreen owner above
+		// the independent toolbar. Restore its z-order without taking focus.
+		if wParam&0xffff != 0 {
+			if toolbar := activeToolbarWindow.Load(); toolbar != 0 {
+				procPostMessage.Call(toolbar, wmToolbarRaise, state.hwnd, 0)
+			}
+		}
 	case wmPaint:
 		state.paintTextEditor()
 		return 0
@@ -1439,6 +1450,7 @@ func frozenTextWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uint
 	result, _, _ := procFrozenCallWindowProc.Call(textEdit.oldProcedure, hwnd, uintptr(message), wParam, lParam)
 	switch message {
 	case 0x0007, 0x000C, wmKeyDown, 0x0102, 0x010E, 0x010F, 0x0300, 0x0301, 0x0302, 0x0303, 0x0304, wmLButtonDown, wmLButtonUp, wmMouseMove:
+		state.resizeTextEditor()
 		procInvalidateRect.Call(hwnd, 0, 0)
 		procUpdateWindow.Call(hwnd)
 	}
@@ -2117,8 +2129,6 @@ func (state *frozenState) drawRoundHandle(center image.Point, red, green, blue b
 			}
 			if distance >= inner*inner {
 				state.setOverlayPixel(image.Pt(x, y), red, green, blue)
-			} else {
-				state.setOverlayPixel(image.Pt(x, y), 255, 255, 255)
 			}
 		}
 	}

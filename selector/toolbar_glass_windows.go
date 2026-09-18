@@ -19,6 +19,7 @@ const (
 	wmToolbarBackdrop        = wmUser + 104
 	wmToolbarBackgroundReady = wmUser + 106
 	glassFrameTimer          = 903
+	glassBackdropTimer       = 904
 )
 
 type frozenBackdropRequest struct {
@@ -48,6 +49,7 @@ type glassWindow struct {
 	bounds                image.Rectangle
 	dirty                 bool
 	fetch                 backdropFetch
+	nextSample            time.Time
 	levels                []glass.Transition
 }
 
@@ -102,6 +104,7 @@ func (state *toolbarState) updateGlassDPI(dpi int) {
 	}
 	state.closeStylePanel()
 	procFrozenKillTimer.Call(state.hwnd, glassFrameTimer)
+	procFrozenKillTimer.Call(state.hwnd, glassBackdropTimer)
 	state.motions = nil
 	state.hovering, state.pressed = false, false
 	state.glassWindow.close()
@@ -151,7 +154,7 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 			count = len(editor.PresetWidths())
 		}
 	}
-	if window.bounds != bounds || window.base == nil {
+	if window.bounds.Size() != bounds.Size() || window.frame == nil {
 		window.close()
 		window.bounds = bounds
 		window.dirty = true
@@ -162,24 +165,49 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 		window.frame = image.NewRGBA(window.surface.client)
 		window.levels = make([]glass.Transition, count*3)
 	}
+	// Moving keeps the existing material and native surface visible while the
+	// new screen location is sampled asynchronously.
+	if window.bounds != bounds {
+		window.bounds = bounds
+		window.dirty = true
+	}
 	sampleBounds := bounds.Inset(-glass.Support(state.dpi))
+	requestedBounds := window.fetch.bounds
 	source, received := window.fetch.poll()
+	if received && (source == nil || requestedBounds.Size() != sampleBounds.Size()) {
+		// Failed or differently sized samples cannot replace the material.
+		source, received = nil, false
+		window.dirty = true
+	}
 	if window.dirty {
 		if state.background == nil {
 			window.dirty = false
-		} else if window.fetch.start(state.background, sampleBounds, func() {
+		} else if !time.Now().Before(window.nextSample) && window.fetch.start(state.background, sampleBounds, func() {
 			procPostMessage.Call(hwnd, wmToolbarBackgroundReady, 0, 0)
 		}) {
 			window.dirty = false
+			window.nextSample = time.Now().Add(time.Second / 30)
 		}
 	}
+	if window.dirty && window.fetch.result == nil && state.background != nil {
+		delay := max(int64(1), time.Until(window.nextSample).Milliseconds()+1)
+		procFrozenSetTimer.Call(state.hwnd, glassBackdropTimer, uintptr(delay), 0)
+	}
 	if received || window.base == nil {
+		// Present the completed sample even if the toolbar moved meanwhile.
+		// Rendering in its original coordinates avoids stretching/clamping it;
+		// the next scheduled sample catches up to the latest position.
+		renderBounds := bounds
+		if received {
+			sampleBounds = requestedBounds
+			renderBounds = requestedBounds.Inset(glass.Support(state.dpi))
+		}
 		back := glass.Crop(source, sampleBounds)
 		if window.base == nil || window.backdrop == nil || !bytes.Equal(back.Pix, window.backdrop.Pix) {
 			body := (image.Rectangle{Max: bounds.Size()}).Inset(glass.Margin(state.dpi))
 			theme := glass.Light
-			theme.TintAmount = 1 - float64(toolbarTransparency.Load())/100
-			window.base = glass.RenderFrosted(back, bounds, body, radius, state.dpi, theme)
+			theme.TintAmount = .784
+			window.base = glass.RenderFrosted(back, renderBounds, body, radius, state.dpi, theme)
 			window.backdrop = back
 		}
 	}

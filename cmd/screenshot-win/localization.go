@@ -7,10 +7,8 @@ import (
 )
 
 const (
-	textToolbarTransparency     = "toolbar_transparency"
-	textToolbarTransparencyHelp = "toolbar_transparency_help"
-	languageEnglish             = "en"
-	languageChinese             = "zh-CN"
+	languageEnglish = "en"
+	languageChinese = "zh-CN"
 )
 
 type languageDefinition struct{ Code, Name string }
@@ -57,9 +55,7 @@ const (
 
 var catalogs = map[string]map[string]string{
 	languageEnglish: {
-		textToolbarTransparency:     "Toolbar transparency (%):",
-		textToolbarTransparencyHelp: "0–100; higher is more transparent. Applies to your next capture.",
-		textPinOriginalSize:         "Original size", textPinClose: "Close",
+		textPinOriginalSize: "Original size", textPinClose: "Close",
 		textSettings: "Settings", textGeneral: "General", textAdvanced: "Advanced", textKeyboardShortcut: "Keyboard shortcut",
 		textStartCapture: "Start capture", textStartCaptureLabel: "Start capture:", textPinClipboard: "Pin clipboard", textClearHotkey: "Clear", textHotkeyHelp: "Ctrl / Alt / Shift + a key, or F1–F11. Both shortcuts are optional.", textLanguageLabel: "Language:",
 		textScrollingMatching: "Scrolling capture matching", textLongCaptureMode: "Capture direction:", textLongCaptureBidirectional: "Bidirectional (up and down)", textLongCaptureLegacy: "One-way (down only, legacy)",
@@ -72,9 +68,7 @@ var catalogs = map[string]map[string]string{
 		textSettingsMenu:   "Settings…", textExit: "Exit", textPNGFilter: "PNG image (*.png)\x00*.png\x00All files (*.*)\x00*.*\x00\x00", textSaveScreenshot: "Save screenshot",
 	},
 	languageChinese: {
-		textToolbarTransparency:     "菜单栏透明度（%）：",
-		textToolbarTransparencyHelp: "0–100，数值越大越透明。应用后在下次截图时生效。",
-		textPinOriginalSize:         "原始大小", textPinClose: "关闭",
+		textPinOriginalSize: "原始大小", textPinClose: "关闭",
 		textSettings: "设置", textGeneral: "常规", textAdvanced: "高级", textKeyboardShortcut: "快捷键", textStartCapture: "开始截图",
 		textStartCaptureLabel: "开始截图：", textPinClipboard: "剪贴板贴图", textClearHotkey: "清除", textHotkeyHelp: "Ctrl / Alt / Shift + 按键，或单独 F1–F11。截图和贴图快捷键均可留空。", textLanguageLabel: "语言：",
 		textScrollingMatching: "长截图匹配", textLongCaptureMode: "截图方向：", textLongCaptureBidirectional: "双向（向上和向下）", textLongCaptureLegacy: "单向（仅向下，旧版）",

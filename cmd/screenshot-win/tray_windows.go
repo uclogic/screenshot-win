@@ -449,7 +449,6 @@ func (host *windowsTrayHost) applyPreferences(value preferences) error {
 	}
 	host.preferences = value
 	setUILanguage(value.General.Language)
-	selector.SetToolbarTransparency(value.General.ToolbarTransparency)
 	host.configMu.Lock()
 	host.config = value.apply(host.config)
 	host.configMu.Unlock()

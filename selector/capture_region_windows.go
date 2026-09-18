@@ -4,13 +4,14 @@ package selector
 
 import (
 	"image"
+	"image/color"
 	"math"
 
 	"screenshot-win/editor"
 )
 
 func (state *frozenState) captureRegionLayout(region image.Rectangle) editor.RectangleLayout {
-	return editor.LayoutRectangleAllHandles(region.Min, region.Max, state.dpi, 3)
+	return editor.LayoutRectangleAllHandles(region.Min, region.Max, state.dpi, editor.DefaultStyle().Width)
 }
 
 func (state *frozenState) beginCaptureRegionResize(point image.Point) bool {
@@ -50,6 +51,10 @@ func (state *frozenState) commitCaptureRegionResize() {
 	state.regionTransform = nil
 	procReleaseCapture.Call()
 	state.publishRegion(state.region.Add(state.desktop.Min))
+	if toolbar := activeToolbarWindow.Load(); toolbar != 0 {
+		// Flush the final background without waiting for the sampling interval.
+		procPostMessage.Call(toolbar, wmToolbarBackdrop, state.hwnd, 1)
+	}
 }
 
 func (state *frozenState) cancelCaptureRegionResize() bool {
@@ -114,24 +119,36 @@ func (state *frozenState) captureRegionFootprint(region image.Rectangle) [4]imag
 }
 
 func (state *frozenState) drawCaptureChrome() {
-	drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 	if !state.editableRegion {
+		drawOuterPixelBorder(state.pixels, state.client.Dx(), state.client, state.region)
 		return
 	}
 	layout := state.captureRegionLayout(state.region)
-	const blueR, blueG, blueB = 22, 140, 255
-	margin := int(math.Ceil(layout.Radius + layout.Stroke/2 + .5))
-	for n := 0; n < layout.Count; n++ {
-		handle := layout.Handles[n].Point
-		bounds := image.Rect(int(math.Floor(handle.X))-margin, int(math.Floor(handle.Y))-margin, int(math.Ceil(handle.X))+margin+1, int(math.Ceil(handle.Y))+margin+1).Intersect(state.client)
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				coverage := layout.HandleCoverage(editor.ScreenPoint{X: float64(x), Y: float64(y)})
+	outline := color.NRGBA{R: 22, G: 140, B: 255, A: 255}
+	channels := [3]byte{outline.B, outline.G, outline.R}
+	strips := state.captureRegionFootprint(state.region)
+	for n, strip := range strips {
+		strip = strip.Intersect(state.client)
+		for y := strip.Min.Y; y < strip.Max.Y; y++ {
+			for x := strip.Min.X; x < strip.Max.X; x++ {
+				point := image.Pt(x, y)
+				owned := false
+				for _, previous := range strips[:n] {
+					if point.In(previous) {
+						owned = true
+						break
+					}
+				}
+				if owned {
+					continue
+				}
+				// Use the annotation border's interrupted segments, leaving
+				// the hollow resize handles free of crossing lines.
+				coverage := layout.BorderCoverage(editor.ScreenPoint{X: float64(x), Y: float64(y)}, editor.DefaultStyle().Width)
 				if coverage <= 0 {
 					continue
 				}
 				index := (y*state.client.Dx() + x) * 4
-				channels := [3]byte{blueB, blueG, blueR}
 				for channel := range 3 {
 					value := float64(state.pixels[index+channel])
 					state.pixels[index+channel] = byte(math.Round(value + (float64(channels[channel])-value)*coverage))
@@ -140,6 +157,7 @@ func (state *frozenState) drawCaptureChrome() {
 			}
 		}
 	}
+	state.drawRectangleLayoutHandles(layout, outline)
 }
 
 func (state *frozenState) setCursor(cursorID int) {

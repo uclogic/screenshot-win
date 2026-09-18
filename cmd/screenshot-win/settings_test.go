@@ -54,30 +54,27 @@ func TestDefaultPreferencesAreValid(t *testing.T) {
 	}
 }
 
-func TestToolbarTransparencyPreferences(t *testing.T) {
+func TestLegacyToolbarTransparencyIsIgnored(t *testing.T) {
 	path := filepath.Join(t.TempDir(), settingsFileName)
-	if err := os.WriteFile(path, []byte("[general]\nlanguage='en'\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[general]\nlanguage='en'\ntoolbar_transparency=35\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	value, err := loadPreferences(path)
-	if err != nil || value.General.ToolbarTransparency != 60 {
-		t.Fatalf("legacy settings: %+v, %v", value, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, percent := range []int{0, 35, 65, 100} {
-		value.General.ToolbarTransparency = percent
-		if err := savePreferences(path, value); err != nil {
-			t.Fatal(err)
-		}
-		got, err := loadPreferences(path)
-		if err != nil || got.General.ToolbarTransparency != percent {
-			t.Fatalf("transparency %d: %+v, %v", percent, got, err)
-		}
+	if value != defaultPreferences() {
+		t.Fatalf("legacy settings: %+v", value)
 	}
-	for _, percent := range []int{-1, 101} {
-		value.General.ToolbarTransparency = percent
-		if value.Validate() == nil {
-			t.Fatalf("accepted transparency %d", percent)
-		}
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "toolbar_transparency") {
+		t.Fatal("removed preference was saved")
 	}
 }
 

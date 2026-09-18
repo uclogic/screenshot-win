@@ -65,7 +65,7 @@ func Render(source image.Image, bounds, body image.Rectangle, radius float64, dp
 	return render(source, bounds, body, radius, dpi, theme, false)
 }
 
-// RenderFrosted uses the theme's tint amount and a light blur without lens distortion.
+// RenderFrosted uses the theme's tint amount and a broad blur without lens distortion.
 // Like Render, it composites the backdrop before presenting the native surface.
 func RenderFrosted(source image.Image, bounds, body image.Rectangle, radius float64, dpi int, theme Theme) *image.RGBA {
 	theme.Tint = color.NRGBA{255, 255, 255, 255}
@@ -77,8 +77,9 @@ func render(source image.Image, bounds, body image.Rectangle, radius float64, dp
 	back := Crop(source, bounds.Inset(-Support(dpi)))
 	blurRadius := Scale(3, dpi)
 	if frosted {
-		// Three radius-2 box passes approximate a 2px Gaussian blur at 96 DPI.
-		blurRadius = Scale(2, dpi)
+		// Three radius-6 passes suppress text and fine background details,
+		// retaining broad color changes within the existing sampling support.
+		blurRadius = Scale(6, dpi)
 	}
 	for i := 0; i < 3; i++ {
 		back = blur(back, blurRadius)

@@ -142,6 +142,18 @@ func copyImageToBGRA(pixels []byte, width, height int, source image.Image) error
 		return fmt.Errorf("pixel buffer size is %d, want %d", len(pixels), width*height*4)
 	}
 	bounds := source.Bounds()
+	// Captures are RGBA. Read their rows directly to avoid an interface call
+	// and a boxed color allocation for every pixel of the virtual desktop.
+	if rgba, ok := source.(*image.RGBA); ok {
+		for y := 0; y < height; y++ {
+			row := rgba.Pix[y*rgba.Stride : y*rgba.Stride+width*4]
+			dst := pixels[y*width*4 : (y+1)*width*4]
+			for x := 0; x < len(row); x += 4 {
+				dst[x], dst[x+1], dst[x+2], dst[x+3] = row[x+2], row[x+1], row[x], 255
+			}
+		}
+		return nil
+	}
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			red, green, blue, _ := source.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()

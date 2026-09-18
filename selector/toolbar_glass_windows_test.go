@@ -5,8 +5,10 @@ package selector
 import (
 	"image"
 	"testing"
+	"time"
 
 	"screenshot-win/editor"
+	"screenshot-win/internal/ui/glass"
 )
 
 func TestGlassNativeSurfaceAndBackgroundOwnership(t *testing.T) {
@@ -49,6 +51,48 @@ func TestGlassNativeSurfaceAndBackgroundOwnership(t *testing.T) {
 	state.paintGlass(0, false)
 	if w.base != base {
 		t.Fatal("unchanged backdrop rebuilt material")
+	}
+	// Moving while background acquisition is pending must preserve the material
+	// and native surface, including when the old request eventually completes.
+	memoryDC, bitmap := w.surface.memoryDC, w.surface.bitmap
+	oldBounds := w.bounds
+	pending := make(chan image.Image, 1)
+	w.fetch = backdropFetch{result: pending, bounds: oldBounds}
+	state.windowBounds = state.windowBounds.Add(image.Pt(20, 30))
+	state.paintGlass(0, false)
+	if w.base != base || w.surface.memoryDC != memoryDC || w.surface.bitmap != bitmap || w.fetch.result != pending {
+		t.Fatal("moving discarded the glass material, surface, or pending request")
+	}
+	pending <- image.NewRGBA(oldBounds)
+	state.paintGlass(0, false)
+	if w.base != base {
+		t.Fatal("wrong-sized background replaced the glass material")
+	}
+	completed := make(chan image.Image, 1)
+	sampledBounds := oldBounds.Inset(-glass.Support(state.dpi))
+	completed <- image.NewRGBA(sampledBounds)
+	w.fetch = backdropFetch{result: completed, bounds: sampledBounds}
+	state.paintGlass(0, false)
+	if w.base == base || w.backdrop.Bounds() != sampledBounds {
+		t.Fatal("completed sample was discarded during movement")
+	}
+	base = w.base
+	// Repaints inside the sampling interval must keep the material without
+	// starting another background request.
+	state.background = func(bounds image.Rectangle) image.Image { return image.NewRGBA(bounds) }
+	w.nextSample = time.Now().Add(time.Hour)
+	w.dirty = true
+	state.paintGlass(0, false)
+	if w.fetch.result != nil || !w.dirty || w.base != base {
+		t.Fatal("background sampling ignored the refresh interval")
+	}
+	state.background = nil
+	failed := make(chan image.Image, 1)
+	failed <- nil
+	w.fetch = backdropFetch{result: failed}
+	state.paintGlass(0, false)
+	if w.base != base {
+		t.Fatal("failed background request replaced the glass material")
 	}
 	w.close()
 	if w.surface.memoryDC != 0 || w.surface.bitmap != 0 || w.surface.pixels != nil {

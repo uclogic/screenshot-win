@@ -558,6 +558,9 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 	case wmToolbarBackdrop:
 		if wParam == state.shortcutTarget && state.glassEnabled {
 			state.glassWindow.dirty = true
+			if lParam != 0 {
+				state.glassWindow.nextSample = time.Time{}
+			}
 			state.panel.glassWindow.dirty = true
 			procInvalidateRect.Call(hwnd, 0, 0)
 			if state.panel.hwnd != 0 {
@@ -566,8 +569,8 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 		}
 		return 0
 	case wmTimer:
-		if wParam == glassFrameTimer {
-			procFrozenKillTimer.Call(hwnd, glassFrameTimer)
+		if wParam == glassFrameTimer || wParam == glassBackdropTimer {
+			procFrozenKillTimer.Call(hwnd, wParam)
 			procInvalidateRect.Call(hwnd, 0, 0)
 			if state.panel.hwnd != 0 {
 				procInvalidateRect.Call(state.panel.hwnd, 0, 0)
@@ -711,6 +714,7 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 	case wmDestroy:
 		state.motionClosed = true
 		procFrozenKillTimer.Call(hwnd, glassFrameTimer)
+		procFrozenKillTimer.Call(hwnd, glassBackdropTimer)
 		state.motions = nil
 		state.glassWindow.close()
 		state.closeStylePanel()

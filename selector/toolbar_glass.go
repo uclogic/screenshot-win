@@ -3,20 +3,7 @@ package selector
 import (
 	"image"
 	"screenshot-win/internal/ui/glass"
-	"sync/atomic"
 )
-
-const DefaultToolbarTransparency = 60
-
-var toolbarTransparency atomic.Int32
-
-func init() { toolbarTransparency.Store(DefaultToolbarTransparency) }
-
-// SetToolbarTransparency sets the background visibility percentage for new surfaces.
-// Icon opacity is unchanged. This is safe to call while a toolbar is open.
-func SetToolbarTransparency(percent int) {
-	toolbarTransparency.Store(int32(max(0, min(100, percent))))
-}
 
 func glassToolbarSize(count, dpi int) image.Point {
 	m := glass.Margin(dpi)

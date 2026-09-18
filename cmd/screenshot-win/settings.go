@@ -40,11 +40,10 @@ func candidateModeIndex(name string) int {
 }
 
 type generalPreferences struct {
-	ToolbarTransparency int    `toml:"toolbar_transparency"`
-	CandidateMode       string `toml:"candidate_mode"`
-	Hotkey              string `toml:"hotkey"`
-	PinHotkey           string `toml:"pin_hotkey"`
-	Language            string `toml:"language"`
+	CandidateMode string `toml:"candidate_mode"`
+	Hotkey        string `toml:"hotkey"`
+	PinHotkey     string `toml:"pin_hotkey"`
+	Language      string `toml:"language"`
 }
 
 type longCapturePreferences struct {
@@ -70,7 +69,7 @@ const (
 func defaultPreferences() preferences {
 	match := screenshotwin.DefaultMatchOptions()
 	return preferences{
-		General: generalPreferences{CandidateMode: "minimal_rectangle", Hotkey: "Alt+Shift+A", Language: languageEnglish, ToolbarTransparency: selector.DefaultToolbarTransparency},
+		General: generalPreferences{CandidateMode: "minimal_rectangle", Hotkey: "Alt+Shift+A", Language: languageEnglish},
 		LongCapture: longCapturePreferences{
 			Mode:                longCaptureModeLegacy,
 			IntervalMS:          int(defaultCaptureInterval / time.Millisecond),
@@ -145,9 +144,6 @@ func savePreferences(path string, value preferences) error {
 }
 
 func (value preferences) Validate() error {
-	if value.General.ToolbarTransparency < 0 || value.General.ToolbarTransparency > 100 {
-		return fmt.Errorf("toolbar transparency must be between 0 and 100")
-	}
 	if candidateModeIndex(value.General.CandidateMode) < 0 {
 		return fmt.Errorf("invalid candidate mode %q", value.General.CandidateMode)
 	}

@@ -4,6 +4,7 @@ package selector
 
 import (
 	"image"
+	"image/color"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -89,6 +90,13 @@ func (state *frozenState) paintTextEditor() {
 			}
 		}
 	}
+	// A persistent, quiet baseline identifies the editable area even when empty.
+	// It is UI chrome only and is never included in the committed annotation.
+	for x := 0; x < view.Bounds().Dx(); x++ {
+		if x%4 < 2 {
+			view.SetNRGBA(x, view.Bounds().Dy()-1, color.NRGBA{R: 75, G: 151, B: 225, A: 255})
+		}
+	}
 	pixels := make([]byte, view.Bounds().Dx()*view.Bounds().Dy()*4)
 	if err := copyImageToBGRA(pixels, view.Bounds().Dx(), view.Bounds().Dy(), view); err != nil {
 		return
@@ -102,4 +110,31 @@ func (state *frozenState) renderTextPreview(text string) *image.NRGBA {
 	edit := state.textEdit
 	draft := editor.Annotation{Tool: editor.ToolText, Start: edit.start, Text: text, Style: edit.style}
 	return editor.RenderViewport(state.document.RenderedPreview(edit.id, &draft), state.viewport, edit.bounds)
+}
+
+// Size before showing and after edits so an empty editor never spans the canvas.
+func (state *frozenState) resizeTextEditor() {
+	edit := state.textEdit
+	if edit == nil || edit.closing {
+		return
+	}
+	text := frozenInputText(edit.hwnd) + edit.composition
+	units := utf16.Encode([]rune(text))
+	var extent struct{ X, Y int32 }
+	dc, _, _ := procGetDC.Call(edit.hwnd)
+	if dc == 0 {
+		return
+	}
+	old, _, _ := procSelectObject.Call(dc, edit.font)
+	if len(units) > 0 {
+		procFrozenTextExtent.Call(dc, uintptr(unsafe.Pointer(&units[0])), uintptr(len(units)), uintptr(unsafe.Pointer(&extent)))
+	}
+	procSelectObject.Call(dc, old)
+	procReleaseDC.Call(edit.hwnd, dc)
+	width := max(1, min(state.annotationCanvas().Max.X-edit.bounds.Min.X, max(120, int(extent.X)+24)))
+	if width == edit.bounds.Dx() {
+		return
+	}
+	edit.bounds.Max.X = edit.bounds.Min.X + width
+	procSetWindowPos.Call(edit.hwnd, 0, 0, 0, uintptr(width), uintptr(edit.bounds.Dy()), 0x0016) // no move, z-order or activation
 }

@@ -78,7 +78,6 @@ func run(arguments []string) error {
 	settingsPath := settingsPathForExecutable(executable)
 	saved, settingsErr := loadPreferences(settingsPath)
 	setUILanguage(saved.General.Language)
-	selector.SetToolbarTransparency(saved.General.ToolbarTransparency)
 	options.Preferences = saved
 	options.Config = saved.apply(application.Config{})
 	if err := options.Config.Validate(); err != nil {

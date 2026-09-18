@@ -113,8 +113,6 @@ Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, 
 
 Pins appear near the mouse pointer and use the existing drag, zoom, and close controls. While a capture or clipboard-pin operation is running, additional triggers are ignored. Applying settings takes effect immediately; older settings files keep clipboard pinning disabled until configured.
 
-In Settings → General, **Toolbar transparency (%)** accepts 0–100 (higher means more transparent), with a default of 60. It changes the toolbar background while keeping icons opaque, and applies to the next capture. You can also edit `general.toolbar_transparency` in the TOML file and restart the app. Older files without this key use 60.
-
 The generated file has this shape:
 
 ```toml
@@ -122,7 +120,6 @@ The generated file has this shape:
 hotkey = 'Alt+Shift+A'
 pin_hotkey = ''
 language = 'en'
-toolbar_transparency = 60
 candidate_mode = 'minimal_rectangle'
 
 [long_capture]
