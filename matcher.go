@@ -1,6 +1,7 @@
 package screenshotwin
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"math"
@@ -28,8 +29,11 @@ const (
 // MatchOptions controls vertical scroll matching. Use DefaultMatchOptions as
 // the starting point and override only values that need tuning.
 type MatchOptions struct {
-	MaxOffsetRatio       float64
-	MaxMeanDifference    float64
+	MaxOffsetRatio float64
+	// MaxMeanDifference bounds robust whole-overlap pixel differences.
+	MaxMeanDifference float64
+	// MinimumConfidence is the score gap between independent matching peaks.
+	// Exact independent ties are rejected even when this is zero.
 	MinimumConfidence    float64
 	StationaryDifference float64
 }
@@ -66,6 +70,9 @@ func finite(value float64) bool {
 }
 
 // MatchResult contains the selected offset, scores, and rejection reason.
+// Scores are robust pixel differences in [0, 255] (256 means unavailable).
+// SecondBestScore belongs to an independently verified peak, not an adjacent
+// offset or a candidate that failed structural verification.
 // Reason is empty when Matched is true.
 type MatchResult struct {
 	Offset          int
@@ -79,6 +86,7 @@ type MatchResult struct {
 // grayscale pixels of the last successfully matched frame.
 type Matcher struct {
 	previous []uint8
+	rows     []rowFeature
 	width    int
 	height   int
 	options  MatchOptions
@@ -96,6 +104,7 @@ func NewMatcher(first image.Image, options MatchOptions) (*Matcher, error) {
 	}
 	return &Matcher{
 		previous: pixels,
+		rows:     describeRows(pixels, width, height),
 		width:    width,
 		height:   height,
 		options:  options,
@@ -109,13 +118,18 @@ func (matcher *Matcher) Analyze(current image.Image) (MatchResult, error) {
 		return MatchResult{}, fmt.Errorf("matcher must not be nil")
 	}
 	curr, width, height := grayscale(current)
-	result := analyzeGrayscale(
+	var rows []rowFeature
+	if width > 0 && height > 0 && width == matcher.width && height == matcher.height && !bytes.Equal(matcher.previous, curr) {
+		rows = describeRows(curr, width, height)
+	}
+	result := analyzeDescribedGrayscale(
 		matcher.previous, matcher.width, matcher.height,
 		curr, width, height,
-		matcher.options,
+		matcher.rows, rows, matcher.options,
 	)
 	if result.Matched {
 		matcher.previous = curr
+		matcher.rows = rows
 		matcher.width = width
 		matcher.height = height
 	}
@@ -145,6 +159,10 @@ func AnalyzeScroll(previous, current image.Image, options MatchOptions) (MatchRe
 }
 
 func analyzeGrayscale(prev []uint8, width, height int, curr []uint8, currentWidth, currentHeight int, options MatchOptions) MatchResult {
+	return analyzeDescribedGrayscale(prev, width, height, curr, currentWidth, currentHeight, nil, nil, options)
+}
+
+func analyzeDescribedGrayscale(prev []uint8, width, height int, curr []uint8, currentWidth, currentHeight int, prevRows, currRows []rowFeature, options MatchOptions) MatchResult {
 	if width <= 0 || height <= 0 || currentWidth <= 0 || currentHeight <= 0 {
 		return rejected(RejectionEmptyFrame, 256, 256)
 	}
@@ -152,76 +170,7 @@ func analyzeGrayscale(prev []uint8, width, height int, curr []uint8, currentWidt
 		return rejected(RejectionSizeMismatch, 256, 256)
 	}
 
-	maxOffset := int(float64(height) * options.MaxOffsetRatio)
-	if maxOffset >= height {
-		maxOffset = height - 1
-	}
-	if maxOffset < minimumOffset {
-		return rejected(RejectionFrameTooShort, 256, 256)
-	}
-
-	stationaryScore := overlapScore(prev, curr, width, height, 0, coarseScale)
-	// Exact duplicate captures are common while the user is between wheel
-	// events. Reject them immediately, but do not classify every low average
-	// difference as stationary yet: on sparse pages a real scroll can change
-	// only a tiny fraction of the frame.
-	if stationaryScore == 0 {
-		return rejected(RejectionStationary, stationaryScore, 256)
-	}
-
-	bestCoarseOffset := 0
-	bestCoarseScore := 256.0
-	for offset := minimumOffset; offset <= maxOffset; offset++ {
-		score := overlapScore(prev, curr, width, height, offset, coarseScale)
-		if score < bestCoarseScore {
-			bestCoarseScore = score
-			bestCoarseOffset = offset
-		}
-	}
-
-	start := bestCoarseOffset - 2
-	if start < minimumOffset {
-		start = minimumOffset
-	}
-	end := bestCoarseOffset + 2
-	if end > maxOffset {
-		end = maxOffset
-	}
-
-	bestOffset := 0
-	bestScore := 256.0
-	secondScore := 256.0
-	for offset := start; offset <= end; offset++ {
-		score := overlapScore(prev, curr, width, height, offset, 2)
-		if score < bestScore {
-			secondScore = bestScore
-			bestScore = score
-			bestOffset = offset
-		} else if score < secondScore {
-			secondScore = score
-		}
-	}
-
-	// A low whole-frame difference means "stationary" only when zero offset
-	// fits at least as well as the best translated overlap. This preserves the
-	// noise tolerance of StationaryDifference without letting large blank areas
-	// hide a small but exact content translation.
-	if stationaryScore <= options.StationaryDifference && stationaryScore <= bestScore+stationaryScoreHysteresis {
-		return rejected(RejectionStationary, stationaryScore, bestScore)
-	}
-
-	if bestScore > options.MaxMeanDifference {
-		return rejectedWithOffset(RejectionScoreTooHigh, bestOffset, bestScore, secondScore)
-	}
-	if bestScore > 0.05 && secondScore-bestScore < options.MinimumConfidence {
-		return rejectedWithOffset(RejectionAmbiguous, bestOffset, bestScore, secondScore)
-	}
-	return MatchResult{
-		Offset:          bestOffset,
-		Matched:         true,
-		BestScore:       bestScore,
-		SecondBestScore: secondScore,
-	}
+	return searchScroll(prev, curr, width, height, prevRows, currRows, false, options)
 }
 
 func rejected(reason RejectionReason, bestScore, secondScore float64) MatchResult {

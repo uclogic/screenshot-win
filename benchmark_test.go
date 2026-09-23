@@ -100,3 +100,49 @@ func BenchmarkBidirectionalSequence1200x800(b *testing.B) {
 		}
 	}
 }
+
+// Include fallback and rejection costs, not just the ordinary scrolling path.
+func BenchmarkMatcherScenarios(b *testing.B) {
+	const width, height = 1200, 800
+	for _, name := range []string{"stationary", "smooth_scroll", "sparse", "repeated", "descriptor_fallback", "unrelated"} {
+		b.Run(name, func(b *testing.B) {
+			var previous, current image.Image
+			wantOffset := 0
+			switch name {
+			case "stationary":
+				previous = createTestImage(width, height)
+				current = previous
+			case "smooth_scroll":
+				page := motionTextPage(width, height+400)
+				previous, current = crop(page, 0, height), motionFrame(page, 299, height, 20)
+				wantOffset = 299
+			case "sparse":
+				page := createSparseTestImage(width, height+200)
+				previous, current = crop(page, 0, height), crop(page, 41, height)
+				wantOffset = 41
+			case "repeated":
+				page := repeatedPage(width, height+200, 64)
+				previous, current = crop(page, 0, height), crop(page, 17, height)
+			case "descriptor_fallback":
+				page := descriptorCollisionPage(width, height+200)
+				previous, current = crop(page, 0, height), crop(page, 179, height)
+				wantOffset = 179
+			case "unrelated":
+				page := createTestImage(width, height*2)
+				previous, current = crop(page, 0, height), crop(page, height, height)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				matcher, err := NewMatcher(previous, DefaultMatchOptions())
+				if err != nil {
+					b.Fatal(err)
+				}
+				result, err := matcher.Analyze(current)
+				if err != nil || result.Matched != (wantOffset != 0) || result.Matched && result.Offset != wantOffset {
+					b.Fatalf("unexpected result: %+v, %v", result, err)
+				}
+			}
+		})
+	}
+}

@@ -143,6 +143,26 @@ Move the mouse to preview the smallest detected rectangle containing it. Candida
 
 During scrolling capture, scroll slowly. The default `legacy` mode captures downward scrolling; select `bidirectional` in Settings to capture in both directions. Use the capture toolbar to save, copy, edit, pin, or cancel. Settings changes apply to the next capture.
 
+Both modes use row brightness/gradient descriptors to locate several possible
+vertical offsets, then verify the overlapping pixels in tiles. Small animated
+regions can be treated as outliers, but at least 80% of informative tiles must
+agree; blank background does not count as evidence of a match. Sparse or
+low-contrast content receives denser verification. If candidates fail, matching
+falls back to a full-range grayscale search; indistinguishable descriptors can
+require a slower, full-pixel search. Rejected frames never replace the last
+accepted frame. Bidirectional history relocation uses the same verification.
+
+`max_mean_difference` limits the robust whole-overlap pixel score (0–255).
+Textured tiles are checked separately using relative gradient disagreement,
+so smooth-scroll resampling of text edges is not subjected to an extra absolute
+pixel-error threshold. `minimum_confidence` is the required score gap between
+independent peaks that passed verification, excluding offsets within six pixels
+of the winner. Exact ties between independent peaks are rejected even when this setting
+is zero. `stationary_threshold` applies only when zero displacement fits at least
+as well as a translated overlap. Existing configuration keys and defaults are
+unchanged. This matching tolerance does not remove fixed headers or floating
+elements from the output image.
+
 ### Rectangle annotations
 
 Click a rectangle's border to select and move it. Selected rectangles show hollow,

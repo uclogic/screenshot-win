@@ -1,6 +1,7 @@
 package screenshotwin
 
 import (
+	"bytes"
 	"errors"
 	"image"
 	"image/draw"
@@ -17,6 +18,7 @@ const (
 // BidirectionalResult describes the placement of one frame in a
 // BidirectionalStitcher. Delta is the signed change in the viewport's page Y
 // coordinate: positive values move down the page and negative values move up.
+// Scores use the same robust pixel units and independent peaks as MatchResult.
 type BidirectionalResult struct {
 	Delta           int
 	Position        int
@@ -43,6 +45,7 @@ type BidirectionalStitcher struct {
 	minY         int
 	maxY         int
 	last         []uint8
+	lastRows     []rowFeature
 	lastPosition int
 	options      MatchOptions
 	anchors      map[uint64][]int
@@ -75,6 +78,7 @@ func NewBidirectionalStitcher(first image.Image, options MatchOptions) (*Bidirec
 		height:      height,
 		maxY:        height,
 		last:        gray,
+		lastRows:    describeRows(gray, width, height),
 		options:     options,
 		anchors:     make(map[uint64][]int),
 		ambiguous:   make(map[uint64]struct{}),
@@ -104,7 +108,11 @@ func (stitcher *BidirectionalStitcher) Add(current image.Image) (BidirectionalRe
 		return bidirectionalRejected(RejectionSizeMismatch, 256, 256), nil
 	}
 
-	match := analyzeSignedGrayscale(stitcher.last, curr, width, height, stitcher.options)
+	var rows []rowFeature
+	if !bytes.Equal(stitcher.last, curr) {
+		rows = describeRows(curr, width, height)
+	}
+	match := signedResult(searchScroll(stitcher.last, curr, width, height, stitcher.lastRows, rows, true, stitcher.options))
 	position := stitcher.lastPosition + match.Delta
 	relocalized := false
 	if match.Matched && stitcher.extensionRows(position) > 0 {
@@ -137,6 +145,7 @@ func (stitcher *BidirectionalStitcher) Add(current image.Image) (BidirectionalRe
 	match.AddedBottom = addedBottom
 	match.Relocalized = relocalized
 	stitcher.last = curr
+	stitcher.lastRows = rows
 	stitcher.lastPosition = position
 	return match, nil
 }
@@ -169,57 +178,11 @@ func (stitcher *BidirectionalStitcher) Finish() *image.RGBA {
 }
 
 func analyzeSignedGrayscale(previous, current []uint8, width, height int, options MatchOptions) BidirectionalResult {
-	maxOffset := int(float64(height) * options.MaxOffsetRatio)
-	if maxOffset >= height {
-		maxOffset = height - 1
-	}
-	if maxOffset < minimumOffset {
-		return bidirectionalRejected(RejectionFrameTooShort, 256, 256)
-	}
-	stationaryScore := signedOverlapScore(previous, current, width, height, 0, coarseScale)
-	if stationaryScore == 0 {
-		return bidirectionalRejected(RejectionStationary, stationaryScore, 256)
-	}
+	return signedResult(searchScroll(previous, current, width, height, nil, nil, true, options))
+}
 
-	bestCoarseDelta := 0
-	bestCoarseScore := 256.0
-	for delta := -maxOffset; delta <= maxOffset; delta += coarseScale {
-		if delta > -minimumOffset && delta < minimumOffset {
-			continue
-		}
-		score := signedOverlapScore(previous, current, width, height, delta, coarseScale)
-		if score < bestCoarseScore {
-			bestCoarseScore = score
-			bestCoarseDelta = delta
-		}
-	}
-
-	bestDelta := 0
-	bestScore := 256.0
-	secondScore := 256.0
-	for delta := bestCoarseDelta - coarseScale; delta <= bestCoarseDelta+coarseScale; delta++ {
-		if delta < -maxOffset || delta > maxOffset || (delta > -minimumOffset && delta < minimumOffset) {
-			continue
-		}
-		score := signedOverlapScore(previous, current, width, height, delta, 2)
-		if score < bestScore {
-			secondScore = bestScore
-			bestScore = score
-			bestDelta = delta
-		} else if score < secondScore {
-			secondScore = score
-		}
-	}
-	if stationaryScore <= options.StationaryDifference && stationaryScore <= bestScore+stationaryScoreHysteresis {
-		return bidirectionalRejected(RejectionStationary, stationaryScore, bestScore)
-	}
-	if bestScore > options.MaxMeanDifference {
-		return bidirectionalRejectedWithDelta(RejectionScoreTooHigh, bestDelta, bestScore, secondScore)
-	}
-	if bestScore > 0.05 && secondScore-bestScore < options.MinimumConfidence {
-		return bidirectionalRejectedWithDelta(RejectionAmbiguous, bestDelta, bestScore, secondScore)
-	}
-	return BidirectionalResult{Delta: bestDelta, Matched: true, BestScore: bestScore, SecondBestScore: secondScore}
+func signedResult(result MatchResult) BidirectionalResult {
+	return BidirectionalResult{Delta: result.Offset, Matched: result.Matched, BestScore: result.BestScore, SecondBestScore: result.SecondBestScore, Reason: result.Reason}
 }
 
 func signedOverlapScore(previous, current []uint8, width, height, delta, step int) float64 {
@@ -275,36 +238,35 @@ func (stitcher *BidirectionalStitcher) relocate(current []uint8) BidirectionalRe
 			candidates = append(candidates, candidate{position: position, votes: count})
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].votes > candidates[j].votes })
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].votes != candidates[j].votes {
+			return candidates[i].votes > candidates[j].votes
+		}
+		return candidates[i].position < candidates[j].position
+	})
 	if len(candidates) > maxRelocateTests {
 		candidates = candidates[:maxRelocateTests]
 	}
 
-	bestPosition := 0
-	bestScore := 256.0
-	secondScore := 256.0
+	verified := make([]verifiedOffset, 0, len(candidates))
 	for _, candidate := range candidates {
-		score := stitcher.canvasScore(current, candidate.position, 2)
-		if score < bestScore {
-			secondScore = bestScore
-			bestScore = score
-			bestPosition = candidate.position
-		} else if score < secondScore {
-			secondScore = score
-		}
+		start := maxInt(candidate.position, stitcher.minY)
+		end := minInt(candidate.position+stitcher.frameHeight, stitcher.maxY)
+		canvas := stitcher.grayView()[(start-stitcher.minY)*stitcher.width : (end-stitcher.minY)*stitcher.width]
+		frame := current[(start-candidate.position)*stitcher.width : (end-candidate.position)*stitcher.width]
+		quality := verifyOverlap(canvas, frame, stitcher.width, end-start)
+		verified = append(verified, verifiedOffset{candidate.position, quality})
 	}
-	if bestScore > stitcher.options.MaxMeanDifference {
-		return bidirectionalRejected(RejectionScoreTooHigh, bestScore, secondScore)
-	}
-	if bestScore > 0.05 && secondScore-bestScore < stitcher.options.MinimumConfidence {
-		return bidirectionalRejected(RejectionAmbiguous, bestScore, secondScore)
+	result := chooseVerified(verified, stitcher.options)
+	if !result.Matched {
+		return bidirectionalRejected(result.Reason, result.BestScore, result.SecondBestScore)
 	}
 	return BidirectionalResult{
-		Delta:           bestPosition - stitcher.lastPosition,
-		Position:        bestPosition,
+		Delta:           result.Offset - stitcher.lastPosition,
+		Position:        result.Offset,
 		Matched:         true,
-		BestScore:       bestScore,
-		SecondBestScore: secondScore,
+		BestScore:       result.BestScore,
+		SecondBestScore: result.SecondBestScore,
 		Relocalized:     true,
 	}
 }
@@ -318,32 +280,6 @@ func (stitcher *BidirectionalStitcher) validCandidate(position int) bool {
 
 func (stitcher *BidirectionalStitcher) extensionRows(position int) int {
 	return maxInt(0, stitcher.minY-position) + maxInt(0, position+stitcher.frameHeight-stitcher.maxY)
-}
-
-func (stitcher *BidirectionalStitcher) canvasScore(current []uint8, position, step int) float64 {
-	start := maxInt(position, stitcher.minY)
-	end := minInt(position+stitcher.frameHeight, stitcher.maxY)
-	canvasGray := stitcher.grayView()
-	var difference uint64
-	var count uint64
-	for pageY := start; pageY < end; pageY += step {
-		canvasRow := (pageY - stitcher.minY) * stitcher.width
-		currentRow := (pageY - position) * stitcher.width
-		for x := 0; x < stitcher.width; x += step {
-			a := int(canvasGray[canvasRow+x])
-			b := int(current[currentRow+x])
-			if a > b {
-				difference += uint64(a - b)
-			} else {
-				difference += uint64(b - a)
-			}
-			count++
-		}
-	}
-	if count == 0 {
-		return 256
-	}
-	return float64(difference) / float64(count)
 }
 
 func (stitcher *BidirectionalStitcher) place(current image.Image, currentGray []uint8, position int) (int, int, error) {
