@@ -37,7 +37,7 @@ func (state *toolbarState) motionFrames(now time.Time) ([]toolbarMotionFrame, bo
 // Retarget on input messages as well as paints so rapid press/release events
 // are captured even when Windows coalesces WM_PAINT messages.
 func (state *toolbarState) refreshMotion() {
-	if !state.persistent || state.motionClosed {
+	if !(state.persistent || state.capture) || state.motionClosed {
 		return
 	}
 	_, active := state.motionFrames(time.Now())

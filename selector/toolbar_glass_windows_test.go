@@ -99,3 +99,29 @@ func TestGlassNativeSurfaceAndBackgroundOwnership(t *testing.T) {
 		t.Fatal("surface resources retained")
 	}
 }
+
+func TestCaptureToolbarUsesGlassLayout(t *testing.T) {
+	state := &toolbarState{capture: true, glassEnabled: true, dpi: 144, actions: captureToolbarActions, style: editor.DefaultStyle()}
+	state.clientSize = glassToolbarSize(len(state.actions), state.dpi)
+	state.windowBounds = image.Rectangle{Max: state.clientSize}
+	defer state.glassWindow.close()
+	for index, action := range state.actions {
+		button := glassToolbarButton(index, state.dpi)
+		if got := state.buttonRect(index); got != button {
+			t.Fatalf("capture button %d = %v, want %v", index, got, button)
+		}
+		got, ok := state.actionAt(image.Pt((button.Min.X+button.Max.X)/2, (button.Min.Y+button.Max.Y)/2))
+		if !ok || got != action {
+			t.Fatalf("capture button %d hit = (%v, %v), want (%v, true)", index, got, ok, action)
+		}
+	}
+	if _, ok := state.actionAt(image.Pt(1, state.clientSize.Y/2)); ok {
+		t.Fatal("capture toolbar accepted transparent margin")
+	}
+	if err := state.paintGlass(0, false); err == nil {
+		t.Fatal("presentation accepted a null window")
+	}
+	if state.glassWindow.base == nil || len(state.glassWindow.surface.pixels) == 0 {
+		t.Fatal("capture toolbar did not render its glass material")
+	}
+}

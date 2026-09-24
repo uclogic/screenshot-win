@@ -410,15 +410,16 @@ func runCaptureToolbarWindow(region image.Rectangle, started chan<- captureToolb
 	defer procUnregisterClass.Call(uintptr(unsafe.Pointer(className)), instance)
 
 	state := &toolbarState{
-		action: ActionCancel, capture: true, clientSize: image.Pt(208, 40),
+		action: ActionCancel, capture: true, glassEnabled: true, region: region,
 		actions: captureToolbarActions, labels: []string{"Cancel", "Stop and annotate", "Pin to desktop", "Save as", "Copy"},
 		style: editor.DefaultStyle(), instance: instance, workArea: workArea, dpi: 96,
 	}
+	state.clientSize = glassToolbarSize(len(state.actions), state.dpi)
 	bounds := toolbarBounds(region, workArea, state.clientSize)
 	state.windowBounds = bounds
 	title, _ := syscall.UTF16PtrFromString("screenshot-win capture controls")
 	hwnd, _, callErr := procCreateWindowEx.Call(
-		wsExTopmost|wsExToolWindow|wsExNoActivate,
+		wsExTopmost|wsExToolWindow|wsExNoActivate|wsExLayered,
 		uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), wsPopup,
 		uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()),
 		0, 0, instance, 0,
@@ -439,7 +440,7 @@ func runCaptureToolbarWindow(region image.Rectangle, started chan<- captureToolb
 	}
 	if dpi > 96 {
 		state.dpi = int(dpi)
-		state.clientSize = image.Pt(scaleForDPI(208, int(dpi)), scaleForDPI(40, int(dpi)))
+		state.clientSize = glassToolbarSize(len(state.actions), int(dpi))
 		bounds = toolbarBounds(region, workArea, state.clientSize)
 		state.windowBounds = bounds
 		if ok, _, callErr := procSetWindowPos.Call(hwnd, 0, uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()), 0x0014); ok == 0 {
@@ -453,6 +454,7 @@ func runCaptureToolbarWindow(region image.Rectangle, started chan<- captureToolb
 		started <- captureToolbarStart{err: err}
 		return
 	}
+	state.paintGlassOrFallback(hwnd, false)
 	procShowWindow.Call(hwnd, swShowNoActivate)
 	overlapsCapture := !bounds.Intersect(region).Empty()
 	var captureExcluded uintptr
@@ -578,7 +580,7 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 			return 0
 		}
 	case 0x02E0: // WM_DPICHANGED
-		if state.persistent {
+		if state.persistent || state.capture {
 			state.updateGlassDPI(int(wParam & 0xffff))
 			return 0
 		}
@@ -587,7 +589,7 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 			return ^uintptr(0)
 		}
 	case wmLButtonDown:
-		if state.persistent {
+		if state.persistent || state.capture {
 			state.pressedAction, state.pressed = state.actionAt(mousePoint(lParam))
 			state.hover, state.hovering = state.pressedAction, state.pressed
 			if state.pressed {
@@ -630,7 +632,7 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 		return 0
 	case wmLButtonUp, wmToolbarPin:
 		action, ok := state.actionAt(mousePoint(lParam))
-		if state.persistent && message == wmLButtonUp {
+		if (state.persistent || state.capture) && message == wmLButtonUp {
 			// Existing external callers may synthesize an up message, so retain
 			// the established activation behavior while showing press feedback.
 			state.pressed = false
@@ -1349,7 +1351,7 @@ func paintToolbarBuffered(hwnd uintptr, size image.Point, draw func(uintptr) err
 
 func (state *toolbarState) draw(dc uintptr) error {
 	var frames []toolbarMotionFrame
-	if state.persistent {
+	if state.persistent || state.capture {
 		var active bool
 		frames, active = state.motionFrames(time.Now())
 		if active {
@@ -1357,7 +1359,7 @@ func (state *toolbarState) draw(dc uintptr) error {
 		}
 	}
 	backgroundColor := rgb(42, 45, 50)
-	if state.persistent {
+	if state.persistent || state.capture {
 		backgroundColor = rgb(245, 249, 255)
 	}
 	background, _, _ := procCreateSolidBrush.Call(backgroundColor)
@@ -1368,7 +1370,7 @@ func (state *toolbarState) draw(dc uintptr) error {
 	area := rect{0, 0, int32(state.clientSize.X), int32(state.clientSize.Y)}
 	procFillRect.Call(dc, uintptr(unsafe.Pointer(&area)), background)
 	iconRenderer := newToolbarIconRenderer(dc)
-	if state.persistent {
+	if state.persistent || state.capture {
 		ink := state.inkColor()
 		iconRenderer.ink = &ink
 	}
@@ -1377,7 +1379,7 @@ func (state *toolbarState) draw(dc uintptr) error {
 	for index, action := range state.actions {
 		button := state.buttonRect(index)
 		enabled := toolbarActionEnabled(action)
-		if state.persistent {
+		if state.persistent || state.capture {
 			frame := frames[index]
 			state.drawMotionBackground(dc, index, frame)
 			ink := frame.ink()

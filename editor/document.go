@@ -105,13 +105,17 @@ const (
 	HandleRectangleWest
 )
 
-type documentSnapshot []Annotation
+type documentSnapshot struct {
+	annotations []Annotation
+	region      image.Rectangle
+}
 
-// Document owns an immutable original image and a reversible annotation list.
+// Document owns an immutable original image and reversible annotations and capture region.
 type Document struct {
 	mu          sync.RWMutex
 	original    image.Image
 	annotations []Annotation
+	region      image.Rectangle
 	undo        []documentSnapshot
 	redo        []documentSnapshot
 	nextID      AnnotationID
@@ -121,7 +125,45 @@ func NewDocument(original image.Image) (*Document, error) {
 	if original == nil || original.Bounds().Empty() {
 		return nil, errors.New("editor image must not be empty")
 	}
-	return &Document{original: original, nextID: 1}, nil
+	return &Document{original: original, region: image.Rect(0, 0, original.Bounds().Dx(), original.Bounds().Dy()), nextID: 1}, nil
+}
+
+// NewDocumentWithCaptureRegion starts a document with an already selected area.
+// The initial area is the undo baseline, not an edit.
+func NewDocumentWithCaptureRegion(original image.Image, region image.Rectangle) (*Document, error) {
+	document, err := NewDocument(original)
+	if err != nil {
+		return nil, err
+	}
+	if region.Empty() || !region.In(document.Bounds()) {
+		return nil, errors.New("capture region must be inside the document")
+	}
+	document.region = region
+	return document, nil
+}
+
+// CaptureRegion returns the last committed capture area.
+func (document *Document) CaptureRegion() image.Rectangle {
+	document.mu.RLock()
+	defer document.mu.RUnlock()
+	return document.region
+}
+
+// SetCaptureRegion commits one completed move or resize to the shared history.
+func (document *Document) SetCaptureRegion(region image.Rectangle) error {
+	if document == nil {
+		return errors.New("editor document is nil")
+	}
+	if region.Empty() || !region.In(document.Bounds()) {
+		return errors.New("capture region must be inside the document")
+	}
+	document.mu.Lock()
+	defer document.mu.Unlock()
+	if region != document.region {
+		document.recordMutationLocked()
+		document.region = region
+	}
+	return nil
 }
 
 func (document *Document) Bounds() image.Rectangle {
@@ -239,8 +281,8 @@ func (document *Document) Undo() bool {
 	if len(document.undo) == 0 {
 		return false
 	}
-	document.redo = append(document.redo, cloneAnnotations(document.annotations))
-	document.annotations = cloneAnnotations(document.undo[len(document.undo)-1])
+	document.redo = append(document.redo, document.snapshotLocked())
+	document.restoreLocked(document.undo[len(document.undo)-1])
 	document.undo = document.undo[:len(document.undo)-1]
 	return true
 }
@@ -251,10 +293,10 @@ func (document *Document) Redo() bool {
 	if len(document.redo) == 0 {
 		return false
 	}
-	document.undo = append(document.undo, cloneAnnotations(document.annotations))
+	document.undo = append(document.undo, document.snapshotLocked())
 	last := document.redo[len(document.redo)-1]
 	document.redo = document.redo[:len(document.redo)-1]
-	document.annotations = cloneAnnotations(last)
+	document.restoreLocked(last)
 	return true
 }
 
@@ -265,8 +307,17 @@ func (document *Document) CanUndo() bool {
 }
 
 func (document *Document) recordMutationLocked() {
-	document.undo = append(document.undo, cloneAnnotations(document.annotations))
+	document.undo = append(document.undo, document.snapshotLocked())
 	document.redo = nil
+}
+
+func (document *Document) snapshotLocked() documentSnapshot {
+	return documentSnapshot{annotations: cloneAnnotations(document.annotations), region: document.region}
+}
+
+func (document *Document) restoreLocked(snapshot documentSnapshot) {
+	document.annotations = cloneAnnotations(snapshot.annotations)
+	document.region = snapshot.region
 }
 
 func cloneAnnotations(annotations []Annotation) []Annotation {

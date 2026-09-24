@@ -5,6 +5,7 @@ import "sync/atomic"
 // PinMenuLabels contains the localized text for pinned image context menus.
 type PinMenuLabels struct {
 	OriginalSize string
+	Copy         string
 	Close        string
 }
 
@@ -16,6 +17,9 @@ func SetPinMenuLabels(labels PinMenuLabels) {
 	if labels.OriginalSize == "" {
 		labels.OriginalSize = "Original size"
 	}
+	if labels.Copy == "" {
+		labels.Copy = "Copy"
+	}
 	if labels.Close == "" {
 		labels.Close = "Close"
 	}
@@ -26,5 +30,5 @@ func pinMenuLabels() PinMenuLabels {
 	if labels := currentPinMenuLabels.Load(); labels != nil {
 		return *labels
 	}
-	return PinMenuLabels{OriginalSize: "Original size", Close: "Close"}
+	return PinMenuLabels{OriginalSize: "Original size", Copy: "Copy", Close: "Close"}
 }

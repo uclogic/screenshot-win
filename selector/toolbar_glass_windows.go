@@ -59,7 +59,7 @@ func (window *glassWindow) close() {
 }
 
 func (state *toolbarState) buttonRect(index int) image.Rectangle {
-	if state.persistent {
+	if state.persistent || state.capture {
 		return glassToolbarButton(index, state.dpi)
 	}
 	w := (state.clientSize.X - 8) / len(state.actions)
@@ -67,7 +67,7 @@ func (state *toolbarState) buttonRect(index int) image.Rectangle {
 }
 
 func (state *toolbarState) actionAt(point image.Point) (Action, bool) {
-	if state.persistent {
+	if state.persistent || state.capture {
 		i, ok := glassToolbarActionAt(point, len(state.actions), state.dpi)
 		if !ok {
 			return ActionCancel, false
@@ -83,7 +83,7 @@ func (state *toolbarState) panelOptionAt(point image.Point) (int, bool) {
 }
 
 func (state *toolbarState) inkColor() color.NRGBA {
-	if state.persistent {
+	if state.persistent || state.capture {
 		return glass.Light.Ink
 	}
 	return toolbarIconBaseColor(true)
@@ -135,7 +135,11 @@ func (state *toolbarState) paintGlassOrFallback(hwnd uintptr, panel bool) error 
 	state.glassEnabled = false
 	state.glassWindow.close()
 	state.panel.glassWindow.close()
-	procFrozenSetWindowLongPtr.Call(state.hwnd, ^uintptr(19), wsExTopmost|wsExToolWindow)
+	exStyle := uintptr(wsExTopmost | wsExToolWindow)
+	if state.capture {
+		exStyle |= wsExNoActivate
+	}
+	procFrozenSetWindowLongPtr.Call(state.hwnd, ^uintptr(19), exStyle)
 	if state.panel.hwnd != 0 {
 		procFrozenSetWindowLongPtr.Call(state.panel.hwnd, ^uintptr(19), wsExTopmost|wsExToolWindow)
 		procInvalidateRect.Call(state.panel.hwnd, 0, 0)

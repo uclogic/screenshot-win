@@ -9,21 +9,27 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"screenshot-win/capture"
 )
 
 const (
+	csDblClks          = 0x0008
 	csDropShadow       = 0x00020000
 	wmContextMenu      = 0x007B
 	wmMouseWheel       = 0x020A
 	wmRButtonUp        = 0x0205
 	wmNCRButtonDown    = 0x00A4
 	wmNCRButtonUp      = 0x00A5
+	wmNCLButtonDown    = 0x00A1
+	wmNCLButtonDblClk  = 0x00A3
 	htCaption          = 2
 	mfString           = 0
 	tpmRightButton     = 0x0002
 	tpmReturnCmd       = 0x0100
 	pinCommandOriginal = 2001
 	pinCommandClose    = 2002
+	pinCommandCopy     = 2003
 	dibStretchHalftone = 4
 	rasterSourceCopy   = 0x00CC0020
 )
@@ -41,6 +47,7 @@ var (
 	procPinRectVisible     = gdi32.NewProc("RectVisible")
 	procPinGetClientRect   = user32.NewProc("GetClientRect")
 	procPinUpdateWindow    = user32.NewProc("UpdateWindow")
+	procPinMessageBox      = user32.NewProc("MessageBoxW")
 	pinProcedure           = syscall.NewCallback(pinWindowProcedure)
 	pinStates              sync.Map
 	pinClassOnce           sync.Once
@@ -56,12 +63,17 @@ type pinStart struct {
 
 type pinWindowState struct {
 	hwnd           uintptr
+	source         image.Image
 	original       image.Point
 	scale          float64
 	pixels         []byte
 	bitmapInfo     bitmapInfo
 	renderErr      error
 	softwareRaster bool
+	dragging       bool
+	dragStart      image.Point
+	dragLast       image.Point
+	dragBounds     image.Rectangle
 	vector         interface {
 		DrawToDC(uintptr, image.Point) error
 	}
@@ -96,7 +108,7 @@ func ensurePinWindowClass() (uintptr, *uint16, error) {
 			pinClassErr = win32Error("LoadCursorW", callErr)
 			return
 		}
-		class := windowClassEx{Size: uint32(unsafe.Sizeof(windowClassEx{})), Style: csDropShadow, WindowProcedure: pinProcedure, Instance: instance, Cursor: cursor, ClassName: className}
+		class := windowClassEx{Size: uint32(unsafe.Sizeof(windowClassEx{})), Style: csDblClks | csDropShadow, WindowProcedure: pinProcedure, Instance: instance, Cursor: cursor, ClassName: className}
 		if atom, _, callErr := procRegisterClassEx.Call(uintptr(unsafe.Pointer(&class))); atom == 0 {
 			pinClassErr = win32Error("RegisterClassExW", callErr)
 			return
@@ -123,7 +135,7 @@ func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinS
 		return
 	}
 	bounds := pinInitialBounds(original, origin, workArea)
-	state := &pinWindowState{original: original, scale: pinScaleForSize(original, bounds.Size())}
+	state := &pinWindowState{source: source, original: original, scale: pinScaleForSize(original, bounds.Size())}
 	state.vector, _ = source.(interface {
 		DrawToDC(uintptr, image.Point) error
 	})
@@ -174,6 +186,39 @@ func pinWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) ui
 	switch message {
 	case wmNCHitTest:
 		return htCaption
+	case wmNCLButtonDown:
+		var cursor point
+		bounds, ok := pinWindowBounds(hwnd)
+		if ok && pinCursorPosition(&cursor) {
+			state.dragStart = image.Pt(int(cursor.X), int(cursor.Y))
+			state.dragLast = state.dragStart
+			state.dragBounds = bounds
+			state.dragging = true
+			procSetForegroundWindow.Call(hwnd)
+			procSetCapture.Call(hwnd)
+		}
+		return 0
+	case wmNCLButtonDblClk, wmLButtonDblClk:
+		procDestroyWindow.Call(hwnd)
+		return 0
+	case wmMouseMove:
+		if state.dragging {
+			state.moveWithCursor(hwnd)
+			return 0
+		}
+	case wmLButtonUp:
+		if state.dragging {
+			state.moveWithCursor(hwnd)
+			state.dragging = false
+			procReleaseCapture.Call()
+			return 0
+		}
+	case wmCaptureChanged, wmCancelMode:
+		state.dragging = false
+		if message == wmCancelMode {
+			procReleaseCapture.Call()
+		}
+		return 0
 	case wmMouseWheel:
 		bounds, ok := pinWindowBounds(hwnd)
 		if ok {
@@ -223,6 +268,24 @@ func pinWindowBounds(hwnd uintptr) (image.Rectangle, bool) {
 	return image.Rect(int(area.Left), int(area.Top), int(area.Right), int(area.Bottom)), true
 }
 
+func pinCursorPosition(cursor *point) bool {
+	ok, _, _ := procPinGetCursorPos.Call(uintptr(unsafe.Pointer(cursor)))
+	return ok != 0
+}
+
+func (state *pinWindowState) moveWithCursor(hwnd uintptr) {
+	var cursor point
+	if !pinCursorPosition(&cursor) {
+		return
+	}
+	current := image.Pt(int(cursor.X), int(cursor.Y))
+	if current == state.dragLast {
+		return
+	}
+	state.dragLast = current
+	pinMoveWindow(hwnd, pinDraggedBounds(state.dragBounds, state.dragStart, current))
+}
+
 func pinMoveWindow(hwnd uintptr, bounds image.Rectangle) {
 	procSetWindowPos.Call(hwnd, ^uintptr(0), uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()), 0)
 	procInvalidateRect.Call(hwnd, 0, 0)
@@ -236,8 +299,10 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 	defer procPinDestroyMenu.Call(menu)
 	labels := pinMenuLabels()
 	originalText, _ := syscall.UTF16PtrFromString(labels.OriginalSize)
+	copyText, _ := syscall.UTF16PtrFromString(labels.Copy)
 	closeText, _ := syscall.UTF16PtrFromString(labels.Close)
 	procPinAppendMenu.Call(menu, mfString, pinCommandOriginal, uintptr(unsafe.Pointer(originalText)))
+	procPinAppendMenu.Call(menu, mfString, pinCommandCopy, uintptr(unsafe.Pointer(copyText)))
 	procPinAppendMenu.Call(menu, mfString, pinCommandClose, uintptr(unsafe.Pointer(closeText)))
 	var cursor point
 	procPinGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
@@ -248,6 +313,12 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 		if bounds, ok := pinWindowBounds(hwnd); ok {
 			state.scale = 1
 			pinMoveWindow(hwnd, pinResetBounds(bounds, state.original))
+		}
+	case pinCommandCopy:
+		if err := capture.CopyImage(state.source); err != nil {
+			message, _ := syscall.UTF16PtrFromString(err.Error())
+			title, _ := syscall.UTF16PtrFromString("screenshot-win")
+			procPinMessageBox.Call(hwnd, uintptr(unsafe.Pointer(message)), uintptr(unsafe.Pointer(title)), 0x10 /* MB_ICONERROR */)
 		}
 	case pinCommandClose:
 		procDestroyWindow.Call(hwnd)

@@ -42,6 +42,25 @@ func TestPinResetBoundsUsesOriginalSizeAndCenter(t *testing.T) {
 	}
 }
 
+func TestPinDraggedBoundsCanCrossDisplayEdges(t *testing.T) {
+	initial := image.Rect(100, 100, 500, 300)
+	start := image.Pt(150, 150)
+	for _, test := range []struct {
+		name    string
+		current image.Point
+		want    image.Rectangle
+	}{
+		{"left and top", image.Pt(0, 0), image.Rect(-50, -50, 350, 150)},
+		{"right and bottom", image.Pt(1000, 800), image.Rect(950, 750, 1350, 950)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pinDraggedBounds(initial, start, test.current); got != test.want {
+				t.Fatalf("pinDraggedBounds() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPinInitialBoundsFitsAndClampsToWorkArea(t *testing.T) {
 	got := pinInitialBounds(image.Pt(2000, 1000), image.Pt(1800, 900), image.Rect(0, 0, 1920, 1080))
 	if want := image.Rect(384, 312, 1920, 1080); got != want {

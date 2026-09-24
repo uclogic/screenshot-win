@@ -27,6 +27,75 @@ func TestDocumentUndoRedoAndRedoInvalidation(t *testing.T) {
 	}
 }
 
+func TestCaptureRegionAndAnnotationsShareHistory(t *testing.T) {
+	document, err := NewDocumentWithCaptureRegion(image.NewNRGBA(image.Rect(0, 0, 100, 80)), image.Rect(10, 10, 50, 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := document.CaptureRegion()
+	if document.CanUndo() {
+		t.Fatal("initial selection entered undo history")
+	}
+	moved := image.Rect(20, 15, 60, 45)
+	resized := image.Rect(20, 15, 70, 50)
+	if err := document.SetCaptureRegion(moved); err != nil {
+		t.Fatal(err)
+	}
+	annotation := Annotation{Tool: ToolRectangle, Start: image.Pt(25, 20), End: image.Pt(45, 35), Style: DefaultStyle()}
+	if _, err := document.Add(annotation); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.SetCaptureRegion(resized); err != nil {
+		t.Fatal(err)
+	}
+	if !document.Undo() || document.CaptureRegion() != moved || len(document.Annotations()) != 1 {
+		t.Fatal("first undo did not restore the resize")
+	}
+	if !document.Undo() || document.CaptureRegion() != moved || len(document.Annotations()) != 0 {
+		t.Fatal("second undo did not remove the annotation")
+	}
+	if !document.Undo() || document.CaptureRegion() != initial || document.CanUndo() {
+		t.Fatal("third undo did not restore the initial selection")
+	}
+	if !document.Redo() || document.CaptureRegion() != moved || len(document.Annotations()) != 0 {
+		t.Fatal("first redo did not restore the move")
+	}
+	if !document.Redo() || document.CaptureRegion() != moved || len(document.Annotations()) != 1 {
+		t.Fatal("second redo did not restore the annotation")
+	}
+	if !document.Redo() || document.CaptureRegion() != resized || document.CanRedo() {
+		t.Fatal("third redo did not restore the resize")
+	}
+}
+
+func TestCaptureRegionNoOpAndBranchInvalidateRedo(t *testing.T) {
+	document, err := NewDocumentWithCaptureRegion(image.NewNRGBA(image.Rect(0, 0, 100, 80)), image.Rect(10, 10, 50, 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := document.SetCaptureRegion(document.CaptureRegion()); err != nil || document.CanUndo() {
+		t.Fatalf("unchanged region created history: %v", err)
+	}
+	if err := document.SetCaptureRegion(image.Rect(20, 20, 60, 50)); err != nil {
+		t.Fatal(err)
+	}
+	if !document.Undo() || !document.CanRedo() {
+		t.Fatal("missing redo after undo")
+	}
+	if err := document.SetCaptureRegion(document.CaptureRegion()); err != nil || !document.CanRedo() {
+		t.Fatalf("unchanged region cleared redo history: %v", err)
+	}
+	if err := document.SetCaptureRegion(image.Rect(5, 5, 45, 35)); err != nil {
+		t.Fatal(err)
+	}
+	if document.CanRedo() {
+		t.Fatal("new region edit retained redo history")
+	}
+	if err := document.SetCaptureRegion(image.Rect(-1, 0, 20, 20)); err == nil {
+		t.Fatal("out-of-bounds region was accepted")
+	}
+}
+
 func TestViewportRoundTripAndAnchorZoom(t *testing.T) {
 	viewport := Viewport{Scale: .5, Offset: image.Pt(10, 20)}
 	point := image.Pt(80, 60)

@@ -39,6 +39,24 @@ func TestResizeCaptureRegionHandlesAndBounds(t *testing.T) {
 	}
 }
 
+func TestMoveCaptureRegionKeepsSizeAndClampsToDesktop(t *testing.T) {
+	original := image.Rect(20, 30, 120, 100)
+	bounds := image.Rect(0, 0, 160, 130)
+	for _, test := range []struct {
+		delta image.Point
+		want  image.Rectangle
+	}{
+		{image.Pt(5, 7), image.Rect(25, 37, 125, 107)},
+		{image.Pt(100, 100), image.Rect(60, 60, 160, 130)},
+		{image.Pt(-100, -100), image.Rect(0, 0, 100, 70)},
+		{image.Point{}, original},
+	} {
+		if got := moveCaptureRegion(original, test.delta, bounds); got != test.want {
+			t.Errorf("moveCaptureRegion(%v) = %v, want %v", test.delta, got, test.want)
+		}
+	}
+}
+
 func TestCaptureRegionLayoutAlwaysHasEightHandles(t *testing.T) {
 	state := &frozenState{dpi: 96}
 	if layout := state.captureRegionLayout(image.Rect(4, 5, 20, 21)); layout.Count != 8 {

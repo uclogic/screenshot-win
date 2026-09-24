@@ -12,10 +12,14 @@ func (state *selectionState) refreshCandidate() bool {
 	if ok, _, _ := procPinGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok == 0 {
 		return false
 	}
-	p := image.Pt(int(cursor.X), int(cursor.Y))
-	r, ok := state.candidateExtent.at(state.candidates, p.Sub(state.desktop.Min))
+	return state.refreshCandidateAt(image.Pt(int(cursor.X), int(cursor.Y)).Sub(state.desktop.Min))
+}
+
+func (state *selectionState) refreshCandidateAt(p image.Point) bool {
+	cursor := p.Add(state.desktop.Min)
+	r, ok := state.candidateExtent.at(state.candidates, p)
 	if !ok {
-		area := rect{cursor.X, cursor.Y, cursor.X + 1, cursor.Y + 1}
+		area := rect{int32(cursor.X), int32(cursor.Y), int32(cursor.X + 1), int32(cursor.Y + 1)}
 		monitor, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&area)), monitorDefaultToNearest)
 		info := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
 		if monitor != 0 {
@@ -25,7 +29,7 @@ func (state *selectionState) refreshCandidate() bool {
 		}
 	}
 	// A monitor fallback must also contain the entire indicated area.
-	if state.candidateExtent.active && (!state.candidateExtent.anchor.In(r) || !state.candidateExtent.current.In(r)) {
+	if state.candidateExtent.active && !state.candidateExtent.path.In(r) {
 		r = state.client
 	}
 	changed := r != state.candidate

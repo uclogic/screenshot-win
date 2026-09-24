@@ -179,10 +179,12 @@ func ShowFrozenDesktop(source image.Image, region image.Rectangle) (*Frozen, err
 	if source == nil || source.Bounds().Dx() != desktop.Dx() || source.Bounds().Dy() != desktop.Dy() {
 		return nil, fmt.Errorf("frozen desktop image size must be %dx%d", desktop.Dx(), desktop.Dy())
 	}
-	if region.Intersect(desktop).Empty() {
+	clippedRegion := region.Intersect(desktop)
+	if clippedRegion.Empty() {
 		return nil, fmt.Errorf("capture region %v is outside virtual desktop %v", region, desktop)
 	}
-	document, err := editor.NewDocument(source)
+	region = clippedRegion
+	document, err := editor.NewDocumentWithCaptureRegion(source, region.Sub(desktop.Min))
 	if err != nil {
 		return nil, err
 	}
@@ -601,6 +603,9 @@ func frozenWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr)
 			procSetCapture.Call(hwnd)
 			return 0
 		}
+		if state.beginCaptureRegionMove(point) {
+			return 0
+		}
 		state.beginSelectionDrag(point)
 		return 0
 	case wmLButtonUp:
@@ -834,15 +839,11 @@ func (state *frozenState) applyShortcut(command, amount int) {
 	switch command {
 	case shortcutUndo:
 		if state.document.Undo() {
-			state.validateSelection()
-			state.notifyCurrentSelectionStyle()
-			state.renderOrCloseFrozen()
+			state.restoreHistorySnapshot()
 		}
 	case shortcutRedo:
 		if state.document.Redo() {
-			state.validateSelection()
-			state.notifyCurrentSelectionStyle()
-			state.renderOrCloseFrozen()
+			state.restoreHistorySnapshot()
 		}
 	case shortcutDelete:
 		if state.deleteSelected() {
@@ -865,6 +866,15 @@ func (state *frozenState) applyShortcut(command, amount int) {
 		}
 		state.nudgeSelection(delta)
 	}
+}
+
+func (state *frozenState) restoreHistorySnapshot() {
+	if state.editableRegion {
+		state.setRegion(state.document.CaptureRegion(), true)
+	}
+	state.validateSelection()
+	state.notifyCurrentSelectionStyle()
+	state.renderOrCloseFrozen()
 }
 
 func (state *frozenState) deleteSelected() bool {
@@ -1322,8 +1332,13 @@ func (state *frozenState) cursorAt(point image.Point) int {
 			}
 			return idcSizeAll
 		}
-		if point.In(state.region) && state.activeRequest() != nil {
-			return idcCross
+		if point.In(state.region) {
+			if state.activeRequest() != nil {
+				return idcCross
+			}
+			if state.editableRegion {
+				return idcSizeAll
+			}
 		}
 	}
 	return idcArrow

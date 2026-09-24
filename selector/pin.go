@@ -177,6 +177,10 @@ func pinResetBounds(bounds image.Rectangle, original image.Point) image.Rectangl
 	return image.Rectangle{Min: minPoint, Max: minPoint.Add(original)}
 }
 
+func pinDraggedBounds(bounds image.Rectangle, start, current image.Point) image.Rectangle {
+	return bounds.Add(current.Sub(start))
+}
+
 func pinInitialBounds(original, origin image.Point, workArea image.Rectangle) image.Rectangle {
 	if original.X <= 0 || original.Y <= 0 || workArea.Empty() {
 		return image.Rectangle{}

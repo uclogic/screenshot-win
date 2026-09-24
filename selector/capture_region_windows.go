@@ -22,11 +22,23 @@ func (state *frozenState) beginCaptureRegionResize(point image.Point) bool {
 	if !hit {
 		return false
 	}
+	state.beginCaptureRegionTransform(handle, point)
+	return true
+}
+
+func (state *frozenState) beginCaptureRegionMove(point image.Point) bool {
+	if !state.editableRegion || state.regionTransform != nil || !point.In(state.region) {
+		return false
+	}
+	state.beginCaptureRegionTransform(editor.HandleMove, point)
+	return true
+}
+
+func (state *frozenState) beginCaptureRegionTransform(handle editor.TransformHandle, point image.Point) {
 	state.cancelAnimationFrame()
 	state.regionTransform = &frozenRegionTransform{handle: handle, original: state.region, draft: state.region, anchor: point}
 	procSetCapture.Call(state.hwnd)
 	state.setCursor(rectangleCursor(handle))
-	return true
 }
 
 func (state *frozenState) updateCaptureRegionResize(point image.Point) {
@@ -34,7 +46,13 @@ func (state *frozenState) updateCaptureRegionResize(point image.Point) {
 	if transform == nil {
 		return
 	}
-	next := resizeCaptureRegion(transform.original, transform.handle, point.Sub(transform.anchor), state.client, scaleForDPI(16, state.dpi))
+	delta := point.Sub(transform.anchor)
+	var next image.Rectangle
+	if transform.handle == editor.HandleMove {
+		next = moveCaptureRegion(transform.original, delta, state.client)
+	} else {
+		next = resizeCaptureRegion(transform.original, transform.handle, delta, state.client, scaleForDPI(16, state.dpi))
+	}
 	if next == transform.draft {
 		return
 	}
@@ -50,6 +68,11 @@ func (state *frozenState) commitCaptureRegionResize() {
 	}
 	state.regionTransform = nil
 	procReleaseCapture.Call()
+	if err := state.document.SetCaptureRegion(state.region); err != nil {
+		state.renderErr = err
+		procDestroyWindow.Call(state.hwnd)
+		return
+	}
 	state.publishRegion(state.region.Add(state.desktop.Min))
 	if toolbar := activeToolbarWindow.Load(); toolbar != 0 {
 		// Flush the final background without waiting for the sampling interval.
@@ -67,6 +90,12 @@ func (state *frozenState) cancelCaptureRegionResize() bool {
 	state.setRegion(transform.original, true)
 	state.repaintCaptureRegion(previous, transform.original)
 	return true
+}
+
+func moveCaptureRegion(original image.Rectangle, delta image.Point, bounds image.Rectangle) image.Rectangle {
+	delta.X = max(bounds.Min.X-original.Min.X, min(delta.X, bounds.Max.X-original.Max.X))
+	delta.Y = max(bounds.Min.Y-original.Min.Y, min(delta.Y, bounds.Max.Y-original.Max.Y))
+	return original.Add(delta)
 }
 
 func resizeCaptureRegion(original image.Rectangle, handle editor.TransformHandle, delta image.Point, bounds image.Rectangle, minimum int) image.Rectangle {

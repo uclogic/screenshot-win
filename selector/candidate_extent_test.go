@@ -22,7 +22,7 @@ func TestCandidateExtent(t *testing.T) {
 	e.down(image.Pt(50, 50))
 	check(image.Pt(80, 50), wide)
 	e.down(image.Pt(80, 50)) // Auto-repeat must not move the anchor.
-	check(image.Pt(50, 50), small)
+	check(image.Pt(50, 50), wide)
 	check(image.Pt(20, 20), outer) // Reverse drag.
 	e.held = false
 	check(image.Pt(20, 20), outer)              // Release and click retain the extent.
@@ -39,6 +39,24 @@ func TestCandidateExtentRequiresBothCorners(t *testing.T) {
 	r, ok := e.at([]image.Rectangle{image.Rect(40, 40, 60, 60)}, image.Pt(50, 50))
 	if ok || !r.Empty() {
 		t.Fatalf("selected rectangle that excludes anchor: %v", r)
+	}
+}
+
+func TestCandidateExtentKeepsAreaTraversedWhileTabHeld(t *testing.T) {
+	small := image.Rect(40, 40, 60, 60)
+	wide := image.Rect(0, 40, 100, 60)
+	rs := []image.Rectangle{small, wide}
+	var e candidateExtent
+	e.down(image.Pt(50, 50))
+	if got, _ := e.at(rs, image.Pt(80, 50)); got != wide {
+		t.Fatalf("moving out of the small rectangle selected %v", got)
+	}
+	if got, _ := e.at(rs, image.Pt(50, 50)); got != wide {
+		t.Fatalf("moving back shrank the held selection to %v", got)
+	}
+	e.held = false
+	if got, _ := e.at(rs, image.Pt(50, 50)); got != wide {
+		t.Fatalf("releasing Tab lost the traversed selection: %v", got)
 	}
 }
 

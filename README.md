@@ -45,9 +45,10 @@ line-width buttons also show selection while their panels are open. Hit areas
 stay fixed, commands run immediately, and interrupted animations reverse from
 their current pose. The solid-surface fallback retains the same icon feedback.
 
-The reusable material renderer lives in `internal/ui/glass`. Settings can reuse
-its theme and renderer in a later update; the settings dialog and the toolbar
-shown during active scrolling capture retain their existing appearance.
+The reusable material renderer lives in `internal/ui/glass`. The toolbar shown
+during active scrolling capture uses the same material, icons, spacing, and
+feedback as the post-selection toolbar. Settings can reuse the theme and
+renderer in a later update; the settings dialog retains its existing appearance.
 
 ## Build Windows on Linux
 
@@ -209,4 +210,4 @@ bidirectional.go      Bidirectional matcher, page anchors, and image builder
 
 The repository includes a manually triggered GitHub Actions workflow that tests the project, cross-compiles the Windows amd64 executable on Ubuntu, packages it, generates a SHA-256 checksum, and creates a GitHub release.
 
-When automatic region suggestions are enabled, hold **Tab** to anchor the pointer position, then move the mouse to highlight the smallest candidate rectangle containing both positions. Release **Tab** to keep that choice while moving inside it, then click to confirm. Moving outside the highlighted rectangle resumes normal hover selection. Dragging with the left mouse button still selects a manual area.
+When automatic region suggestions are enabled, hold **Tab** to anchor the pointer position, then move the mouse to highlight the smallest candidate rectangle containing the area traversed while Tab is held. Release **Tab** to keep that choice while moving inside it, then click to confirm. Moving outside the highlighted rectangle resumes normal hover selection. Dragging with the left mouse button still selects a manual area.

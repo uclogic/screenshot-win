@@ -65,6 +65,7 @@ var (
 	gdi32                   = syscall.NewLazyDLL("gdi32.dll")
 	kernel32                = syscall.NewLazyDLL("kernel32.dll")
 	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
+	procGetAsyncKeyState    = user32.NewProc("GetAsyncKeyState")
 	procRegisterClassEx     = user32.NewProc("RegisterClassExW")
 	procUnregisterClass     = user32.NewProc("UnregisterClassW")
 	procCreateWindowEx      = user32.NewProc("CreateWindowExW")
@@ -408,8 +409,18 @@ func selectionWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintp
 			if state.gesture.pressed {
 				state.gesture.move(mousePoint(lParam))
 				state.renderOrClose()
-			} else if state.refreshCandidate() {
-				state.renderOrClose()
+			} else {
+				// The overlay can receive pointer messages even when another
+				// window owns keyboard focus. Recover a missed Tab transition.
+				keyState, _, _ := procGetAsyncKeyState.Call(vkTab)
+				if keyState&0x8000 != 0 {
+					state.candidateExtent.down(state.candidateExtent.current)
+				} else {
+					state.candidateExtent.held = false
+				}
+				if state.refreshCandidateAt(mousePoint(lParam)) {
+					state.renderOrClose()
+				}
 			}
 			return 0
 		}
