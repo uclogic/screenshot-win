@@ -11,18 +11,20 @@ import (
 
 func TestToolbarGlyphMappings(t *testing.T) {
 	wantSources := map[Action]string{
-		ActionCancel:    "x.svg",
-		ActionSave:      "device-floppy.svg",
-		ActionCopy:      "copy.svg",
-		ActionScroll:    "square-rounded-arrow-down.svg",
-		ActionSaveAs:    "file-download.svg",
-		ActionPin:       "pin.svg",
-		ActionEdit:      "edit.svg",
-		ActionRectangle: "rectangle.svg",
-		ActionArrow:     "arrow-up-right.svg",
-		ActionText:      "letter-t.svg",
-		ActionColor:     "palette.svg",
-		ActionWidth:     "line.svg",
+		ActionCancel:      "x.svg",
+		ActionSave:        "device-floppy.svg",
+		ActionCopy:        "copy.svg",
+		ActionScroll:      "square-rounded-arrow-down.svg",
+		ActionSaveAs:      "file-download.svg",
+		ActionPin:         "pin.svg",
+		ActionEdit:        "edit.svg",
+		ActionRectangle:   "rectangle.svg",
+		ActionArrow:       "arrow-up-right.svg",
+		ActionDoubleArrow: "arrows-horizontal.svg",
+		ActionLine:        "minus.svg",
+		ActionText:        "letter-t.svg",
+		ActionColor:       "palette.svg",
+		ActionWidth:       "line.svg",
 	}
 	if len(toolbarGlyphs) != len(wantSources) {
 		t.Fatalf("toolbar glyph count = %d, want %d", len(toolbarGlyphs), len(wantSources))

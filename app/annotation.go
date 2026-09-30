@@ -11,7 +11,7 @@ import (
 	"screenshot-win/selector"
 )
 
-func (runner *Runner) runInlineAnnotation(ctx context.Context, source image.Image, region image.Rectangle) error {
+func (runner *Runner) runInlineAnnotation(ctx context.Context, source image.Image, region image.Rectangle, layout []string) error {
 	desktop := selector.DesktopBounds()
 	if desktop.Empty() {
 		return fmt.Errorf("virtual desktop has invalid bounds %v", desktop)
@@ -25,7 +25,7 @@ func (runner *Runner) runInlineAnnotation(ctx context.Context, source image.Imag
 		return err
 	}
 	defer frozen.Close()
-	toolbar, err := selector.ShowAnnotationToolbarContext(ctx, region, frozen.WindowHandle(), frozen.Background)
+	toolbar, err := selector.ShowAnnotationToolbarContextWithLayout(ctx, region, frozen.WindowHandle(), layout, frozen.Background)
 	if err != nil {
 		return err
 	}

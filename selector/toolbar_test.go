@@ -78,16 +78,16 @@ func TestSelectionToolbarActions(t *testing.T) {
 		point image.Point
 		want  Action
 	}{
-		{image.Pt(10, 20), ActionCancel},
-		{image.Pt(50, 20), ActionScroll},
-		{image.Pt(90, 20), ActionRectangle},
-		{image.Pt(130, 20), ActionArrow},
-		{image.Pt(170, 20), ActionText},
-		{image.Pt(210, 20), ActionColor},
-		{image.Pt(250, 20), ActionWidth},
-		{image.Pt(290, 20), ActionPin},
-		{image.Pt(330, 20), ActionSave},
-		{image.Pt(370, 20), ActionCopy},
+		{image.Pt(10, 20), ActionRectangle},
+		{image.Pt(50, 20), ActionArrow},
+		{image.Pt(90, 20), ActionText},
+		{image.Pt(130, 20), ActionColor},
+		{image.Pt(170, 20), ActionWidth},
+		{image.Pt(210, 20), ActionScroll},
+		{image.Pt(250, 20), ActionPin},
+		{image.Pt(290, 20), ActionSave},
+		{image.Pt(330, 20), ActionCopy},
+		{image.Pt(370, 20), ActionCancel},
 	}
 	for _, test := range tests {
 		got, ok := toolbarActionAtActions(test.point, size, selectionToolbarActions)
@@ -108,11 +108,11 @@ func TestCaptureToolbarActions(t *testing.T) {
 		point image.Point
 		want  Action
 	}{
-		{image.Pt(10, 20), ActionCancel},
-		{image.Pt(50, 20), ActionEdit},
-		{image.Pt(90, 20), ActionPin},
-		{image.Pt(130, 20), ActionSaveAs},
-		{image.Pt(170, 20), ActionCopy},
+		{image.Pt(10, 20), ActionEdit},
+		{image.Pt(50, 20), ActionPin},
+		{image.Pt(90, 20), ActionSaveAs},
+		{image.Pt(130, 20), ActionCopy},
+		{image.Pt(170, 20), ActionCancel},
 	}
 	for _, test := range tests {
 		got, ok := toolbarActionAtActions(test.point, size, captureToolbarActions)
@@ -154,8 +154,8 @@ func TestAnnotationToolbarOmitsLongCapture(t *testing.T) {
 			t.Fatalf("annotation toolbar is missing %v", required)
 		}
 	}
-	if got := annotationToolbarActions[len(annotationToolbarActions)-2:]; got[0] != ActionSave || got[1] != ActionCopy {
-		t.Fatalf("annotation toolbar trailing actions = %v, want save and copy", got)
+	if got := annotationToolbarActions[len(annotationToolbarActions)-3:]; got[0] != ActionSave || got[1] != ActionCopy || got[2] != ActionCancel {
+		t.Fatalf("annotation toolbar trailing actions = %v, want save, copy, and cancel", got)
 	}
 }
 

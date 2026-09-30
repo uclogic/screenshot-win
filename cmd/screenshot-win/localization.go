@@ -20,6 +20,15 @@ var availableLanguages = []languageDefinition{
 }
 
 const (
+	textToolbars                 = "toolbars"
+	textScreenshotToolbar        = "screenshot_toolbar"
+	textLongCaptureToolbar       = "long_capture_toolbar"
+	textToolbarResult            = "toolbar_result"
+	textToolbarCandidates        = "toolbar_candidates"
+	textRestoreDefaults          = "restore_defaults"
+	textToolbarHelp              = "toolbar_help"
+	textToolbarMinimum           = "toolbar_minimum"
+	textToolbarAllVisible        = "toolbar_all_visible"
 	textSettings                 = "settings"
 	textGeneral                  = "general"
 	textAdvanced                 = "advanced"
@@ -56,6 +65,10 @@ const (
 
 var catalogs = map[string]map[string]string{
 	languageEnglish: {
+		textToolbars: "Toolbars", textScreenshotToolbar: "Screenshot", textLongCaptureToolbar: "Scrolling capture",
+		textToolbarResult: "Visible icons", textToolbarCandidates: "Available icons", textRestoreDefaults: "Restore defaults",
+		textToolbarHelp:    "Drag to add, remove or reorder. Esc still cancels captures.",
+		textToolbarMinimum: "Keep at least one action to finish the capture.", textToolbarAllVisible: "All icons are visible. Drag an icon here to hide it.",
 		textPinOriginalSize: "Original size", textPinCopy: "Copy", textPinClose: "Close",
 		textSettings: "Settings", textGeneral: "General", textAdvanced: "Advanced", textKeyboardShortcut: "Keyboard shortcut",
 		textStartCapture: "Start capture", textStartCaptureLabel: "Start capture:", textPinClipboard: "Pin clipboard", textClearHotkey: "Clear", textHotkeyHelp: "Ctrl / Alt / Shift + a key, or F1–F11. Both shortcuts are optional.", textLanguageLabel: "Language:",
@@ -69,6 +82,10 @@ var catalogs = map[string]map[string]string{
 		textSettingsMenu:   "Settings…", textExit: "Exit", textPNGFilter: "PNG image (*.png)\x00*.png\x00All files (*.*)\x00*.*\x00\x00", textSaveScreenshot: "Save screenshot",
 	},
 	languageChinese: {
+		textToolbars: "工具栏", textScreenshotToolbar: "普通截图", textLongCaptureToolbar: "长截图",
+		textToolbarResult: "结果栏", textToolbarCandidates: "候选栏", textRestoreDefaults: "恢复默认",
+		textToolbarHelp:    "拖动图标添加、移除或排序；Esc 仍可取消截图。",
+		textToolbarMinimum: "至少保留一个完成截图的操作。", textToolbarAllVisible: "全部图标已显示，拖入此处可隐藏图标。",
 		textPinOriginalSize: "原始大小", textPinCopy: "复制", textPinClose: "关闭",
 		textSettings: "设置", textGeneral: "常规", textAdvanced: "高级", textKeyboardShortcut: "快捷键", textStartCapture: "开始截图",
 		textStartCaptureLabel: "开始截图：", textPinClipboard: "剪贴板贴图", textClearHotkey: "清除", textHotkeyHelp: "Ctrl / Alt / Shift + 按键，或单独 F1–F11。截图和贴图快捷键均可留空。", textLanguageLabel: "语言：",

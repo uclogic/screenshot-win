@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"slices"
 	"time"
 
 	"screenshot-win/selector"
@@ -58,6 +59,8 @@ func (runner *Runner) RunContext(ctx context.Context, config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
+	config.ScreenshotToolbar = slices.Clone(config.ScreenshotToolbar)
+	config.LongCaptureToolbar = slices.Clone(config.LongCaptureToolbar)
 	return runner.runInteractive(ctx, config)
 }
 

@@ -191,6 +191,18 @@ func buildToolbarGlyphs() map[Action]toolbarGlyph {
 				glyphMove(8, 7), glyphLine(17, 7), glyphLine(17, 16),
 			},
 		},
+		ActionLine: {
+			source:   "minus.svg",
+			commands: []toolbarGlyphCommand{glyphMove(5, 12), glyphLine(19, 12)},
+		},
+		ActionDoubleArrow: {
+			source: "arrows-horizontal.svg",
+			commands: []toolbarGlyphCommand{
+				glyphMove(7, 8), glyphLine(3, 12), glyphLine(7, 16),
+				glyphMove(17, 8), glyphLine(21, 12), glyphLine(17, 16),
+				glyphMove(3, 12), glyphLine(21, 12),
+			},
+		},
 		ActionText: {
 			source: "letter-t.svg",
 			commands: []toolbarGlyphCommand{

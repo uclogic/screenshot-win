@@ -8,7 +8,7 @@ screenshot-win is a lightweight Windows screenshot utility written in Go. It sup
 - Capture and stitch scrolling content in either vertical direction
 - Save screenshots as PNG or copy them to the clipboard
 - Pin a captured image above other windows
-- Add rectangles, arrows, and text annotations
+- Add rectangles, single/double arrows, straight lines, and text annotations
 - Adjust annotation colors and line widths
 - Use a native light glass toolbar with rounded color and line-width panels
 - Run from the Windows notification area
@@ -114,6 +114,8 @@ Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, 
 
 Pins appear near the mouse pointer and use the existing drag, zoom, and close controls. While a capture or clipboard-pin operation is running, additional triggers are ignored. Applying settings takes effect immediately; older settings files keep clipboard pinning disabled until configured.
 
+**Toolbars** contains separate editors for normal screenshots and scrolling capture. Drag icons between the visible and available rows to add or hide them; drag within the visible row to reorder them. Each editor has its own **Restore defaults** button. Cancel can be hidden because Esc still cancels a capture. Keep at least one completion action: Pin, Save or Copy for screenshots; Stop and annotate, Pin, Save as or Copy for scrolling capture. Later annotation uses the screenshot layout without Scrolling capture. Click **Apply** or **OK** to save; new layouts apply to the next capture.
+
 The generated file has this shape:
 
 ```toml
@@ -122,6 +124,10 @@ hotkey = 'Alt+Shift+A'
 pin_hotkey = ''
 language = 'en'
 candidate_mode = 'minimal_rectangle'
+
+[toolbars]
+screenshot = ['rectangle', 'arrow', 'text', 'color', 'width', 'scroll', 'pin', 'save', 'copy', 'cancel']
+long_capture = ['edit', 'pin', 'save_as', 'copy', 'cancel']
 
 [long_capture]
 mode = 'legacy'
@@ -140,7 +146,7 @@ Set `general.candidate_mode` in `screenshot-win.toml` to choose a candidate mode
 - `windows_ui_interface`: reserved, not implemented; currently behaves like none.
 - `minimal_rectangle` (default): freeze the desktop on entry and detect rectangular regions using pure Go image processing.
 
-Move the mouse to preview the smallest detected rectangle containing it. Candidates must be at least 100×80 physical pixels. While detection runs, or if no candidate contains the pointer, the preview uses the entire current monitor, including the taskbar. Click to confirm, or hold and drag to select manually; manual selections have no minimum size. Esc or right-click cancels. Detection and the final screenshot use the same frozen frame. After selection, use the toolbar to save, copy, annotate, pin, or start a scrolling capture.
+Move the mouse to preview the smallest detected rectangle containing it. Candidates must be at least 100×80 physical pixels. While detection runs, or if no candidate contains the pointer, the preview uses the entire current monitor, including the taskbar. Click to confirm, or hold and drag to select manually; manual selections have no minimum size. Esc or right-click cancels. Detection and the final screenshot use the same frozen frame. After selection, use the toolbar to save, copy, annotate, pin, or start a scrolling capture. Click the arrow tool to select it, then left-click it again to open a horizontal icon picker for Arrow, Double arrow, or Line, styled like the color picker. The format menu has no chevron or text labels; changing format affects future strokes only and is remembered until the current screenshot closes.
 
 During scrolling capture, scroll slowly. The default `legacy` mode captures downward scrolling; select `bidirectional` in Settings to capture in both directions. Use the capture toolbar to save, copy, edit, pin, or cancel. Settings changes apply to the next capture.
 

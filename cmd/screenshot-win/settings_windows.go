@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"screenshot-win/selector"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,6 +123,9 @@ type settingsWindow struct {
 	controls                  map[int]uintptr
 	general                   []uintptr
 	advanced                  []uintptr
+	toolbars                  []uintptr
+	toolbarItem               uintptr
+	toolbarEditors            [2]*toolbarEditor
 	generalItem, advancedItem uintptr
 }
 
@@ -318,6 +322,7 @@ func (state *settingsWindow) createControls() error {
 		tree := must(settingsIDTree, "SysTreeView32", "", settingsWSTabStop|settingsWSBorder|settingsTVSHasLines|settingsTVSLinesAtRoot|settingsTVSShowSelAlways)
 		state.generalItem = state.insertTreeItem(tree, localize(language, textGeneral), 1)
 		state.advancedItem = state.insertTreeItem(tree, localize(language, textAdvanced), 2)
+		state.toolbarItem = state.insertTreeItem(tree, localize(language, textToolbars), 3)
 
 		generalGroup := must(2301, "BUTTON", localize(language, textKeyboardShortcut), settingsBSGroupBox)
 		generalLabel := must(2302, "STATIC", localize(language, textStartCaptureLabel), 0)
@@ -357,6 +362,16 @@ func (state *settingsWindow) createControls() error {
 		stationary := must(settingsIDStationary, "EDIT", "", settingsWSTabStop|settingsWSBorder|settingsESAutoHScroll)
 		state.advanced = []uintptr{captureGroup, modeLabel, mode, intervalLabel, interval, maxScrollLabel, maxScroll, maxDiffLabel, maxDiff, confidenceLabel, confidence, stationaryLabel, stationary}
 
+		for i := 0; i < 2; i++ {
+			panel := must(2500+i, "STATIC", "", settingsWSTabStop|0x0100)
+			reset := must(2510+i, "BUTTON", localize(language, textRestoreDefaults), settingsWSTabStop)
+			editor, err := newToolbarEditor(state, panel, i)
+			if err != nil {
+				panic(err)
+			}
+			state.toolbarEditors[i] = editor
+			state.toolbars = append(state.toolbars, panel, reset)
+		}
 		must(1, "BUTTON", localize(language, textOK), settingsWSTabStop|settingsBSDefaultPushButton)
 		must(2, "BUTTON", localize(language, textCancel), settingsWSTabStop)
 		must(settingsIDApply, "BUTTON", localize(language, textApply), settingsWSTabStop)
@@ -367,7 +382,7 @@ func (state *settingsWindow) createControls() error {
 	state.layout()
 	state.load(state.host.preferences)
 	procSettingsSendMessage.Call(state.controls[settingsIDTree], settingsTVMSelectItem, settingsTVGNCaret, state.generalItem)
-	state.showPage(false)
+	state.showPage(state.generalItem)
 	state.setDirty(false)
 	return nil
 }
@@ -412,12 +427,32 @@ func (state *settingsWindow) layout() {
 		move(edits[index], 365, y, 140, 24)
 	}
 
+	for i := 0; i < 2; i++ {
+		move(2500+i, 174, 12+i*194, 476, 184)
+		move(2510+i, 534, 14+i*194, 112, 25)
+		if editor := state.toolbarEditors[i]; editor != nil {
+			editor.cancelDrag()
+			editor.refresh()
+		}
+	}
 	move(1, 410, 416, 76, 28)
 	move(2, 492, 416, 76, 28)
 	move(settingsIDApply, 574, 416, 76, 28)
 }
 
 func (state *settingsWindow) load(value preferences) {
+	for i, editor := range state.toolbarEditors {
+		if editor == nil {
+			continue
+		}
+		ids := value.Toolbars.Screenshot
+		if i == 1 {
+			ids = value.Toolbars.LongCapture
+		}
+		editor.ids, _ = selector.ResolveToolbarLayout(editor.kind, ids)
+		editor.message = ""
+		editor.refresh()
+	}
 	state.loading = true
 	defer func() { state.loading = false }()
 	hotkey, _ := parseConfiguredHotkey(value.General.Hotkey)
@@ -447,6 +482,13 @@ func (state *settingsWindow) handleCommand(id int, notification uint32) {
 		}
 	case 2:
 		procSettingsDestroyWindow.Call(state.hwnd)
+	case 2510, 2511:
+		editor := state.toolbarEditors[id-2510]
+		editor.cancelDrag()
+		editor.ids = selector.DefaultToolbarLayout(editor.kind)
+		editor.message = ""
+		editor.refresh()
+		state.setDirty(true)
 	case settingsIDApply:
 		state.apply()
 	case settingsIDClearHotkey:
@@ -494,6 +536,8 @@ func (state *settingsWindow) apply() bool {
 
 func (state *settingsWindow) read() (preferences, uintptr, error) {
 	value := state.host.preferences
+	value.Toolbars.Screenshot = append([]string(nil), state.toolbarEditors[0].ids...)
+	value.Toolbars.LongCapture = append([]string(nil), state.toolbarEditors[1].ids...)
 	languageIndex, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDLanguage], settingsCBGetCurrent, 0, 0)
 	value.General.Language = languageEnglish
 	if int(languageIndex) < len(availableLanguages) {
@@ -570,23 +614,28 @@ func (state *settingsWindow) read() (preferences, uintptr, error) {
 
 func (state *settingsWindow) updateSelectedPage() {
 	item, _, _ := procSettingsSendMessage.Call(state.controls[settingsIDTree], settingsTVMGetNextItem, settingsTVGNCaret, 0)
-	state.showPage(item == state.advancedItem)
+	state.showPage(item)
 }
 
-func (state *settingsWindow) showPage(advanced bool) {
-	for _, hwnd := range state.general {
-		command := uintptr(settingsSWShow)
-		if advanced {
-			command = settingsSWHide
+func (state *settingsWindow) showPage(page uintptr) {
+	for _, editor := range state.toolbarEditors {
+		if editor != nil {
+			editor.cancelDrag()
 		}
-		procSettingsShowWindow.Call(hwnd, command)
 	}
-	for _, hwnd := range state.advanced {
-		command := uintptr(settingsSWHide)
-		if advanced {
-			command = settingsSWShow
+	for _, group := range []struct {
+		item     uintptr
+		controls []uintptr
+	}{
+		{state.generalItem, state.general}, {state.advancedItem, state.advanced}, {state.toolbarItem, state.toolbars},
+	} {
+		for _, hwnd := range group.controls {
+			command := uintptr(settingsSWHide)
+			if group.item == page {
+				command = settingsSWShow
+			}
+			procSettingsShowWindow.Call(hwnd, command)
 		}
-		procSettingsShowWindow.Call(hwnd, command)
 	}
 }
 
