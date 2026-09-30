@@ -10,6 +10,6 @@ func ShowFrozenDesktop(image.Image, image.Rectangle) (*Frozen, error) {
 	return nil, errUnsupported
 }
 
-func ShowFrozenContent(image.Image, image.Rectangle, image.Image) (*Frozen, error) {
+func ShowFrozenContent(image.Image, image.Rectangle, image.Image, ...float64) (*Frozen, error) {
 	return nil, errUnsupported
 }

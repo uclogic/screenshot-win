@@ -114,6 +114,8 @@ Screenshot and clipboard-pin shortcuts accept any combination of `Ctrl`, `Alt`, 
 
 Pins appear near the mouse pointer and use the existing drag, zoom, and close controls. While a capture or clipboard-pin operation is running, additional triggers are ignored. Applying settings takes effect immediately; older settings files keep clipboard pinning disabled until configured.
 
+Right-click a pin and choose **Edit again** to reopen the annotation toolbar using the current screenshot toolbar layout. Add rectangles, arrows, lines, or text at the pin's current position and zoom. Pin, Save, or Copy completes the edit and updates the same pin, preserving its screen position, zoom, and original image resolution; Cancel leaves it unchanged. Previous markings are part of the image and can be annotated further. Editing shares the capture busy state, and exiting the application cancels an active edit.
+
 **Toolbars** contains separate editors for normal screenshots and scrolling capture. Drag icons between the visible and available rows to add or hide them; drag within the visible row to reorder them. Each editor has its own **Restore defaults** button. Cancel can be hidden because Esc still cancels a capture. Keep at least one completion action: Pin, Save or Copy for screenshots; Stop and annotate, Pin, Save as or Copy for scrolling capture. Later annotation uses the screenshot layout without Scrolling capture. Click **Apply** or **OK** to save; new layouts apply to the next capture.
 
 The generated file has this shape:

@@ -42,7 +42,11 @@ func NewRunner(coordinator *App, runtime Runtime) *Runner {
 	if runtime.Now == nil {
 		runtime.Now = time.Now
 	}
-	return &Runner{coordinator: coordinator, runtime: runtime, pins: selector.NewPinManager()}
+	runner := &Runner{coordinator: coordinator, runtime: runtime, pins: selector.NewPinManager()}
+	runner.pins.SetEditor(func(ctx context.Context, source image.Image, bounds image.Rectangle) (image.Image, error) {
+		return runner.editPinnedImage(ctx, source, bounds, nil)
+	})
+	return runner
 }
 
 // RunContext performs one capture session and cancels it when ctx is done.

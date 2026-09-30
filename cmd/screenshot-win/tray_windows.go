@@ -169,6 +169,9 @@ func runTrayHost(runner *application.Runner, options launchOptions, settingsPath
 	}, func(err error) {
 		showErrorMessage(host.hwnd, err)
 	}, debug.FreeOSMemory)
+	runner.ConfigurePinEditing(host.controller.TriggerTask, func() []string {
+		return host.captureConfig().ScreenshotToolbar
+	})
 	return host.run()
 }
 

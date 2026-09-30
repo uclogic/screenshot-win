@@ -2,7 +2,34 @@
 
 package selector
 
-import "testing"
+import (
+	"image"
+	"image/color"
+	"testing"
+)
+
+func TestReplacingPinImageUpdatesCopyAndPaintWithoutChangingZoom(t *testing.T) {
+	original := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	state := &pinWindowState{scale: 2.5}
+	if err := state.setSource(original); err != nil {
+		t.Fatal(err)
+	}
+	state.softwareRaster = true
+	updated := image.NewRGBA(original.Bounds())
+	updated.SetRGBA(0, 0, color.RGBA{R: 23, G: 67, B: 101, A: 255})
+	if err := state.setSource(updated); err != nil {
+		t.Fatal(err)
+	}
+	if state.source != updated || state.original != original.Bounds().Size() || state.scale != 2.5 {
+		t.Fatal("replacement changed zoom or retained the old source used by Copy")
+	}
+	if state.pixels[0] != 101 || state.pixels[1] != 67 || state.pixels[2] != 23 || state.pixels[3] != 255 || state.softwareRaster {
+		t.Fatal("replacement retained old paint pixels or fallback state")
+	}
+	if err := state.setSource(nil); err == nil || state.source != updated || state.pixels[0] != 101 {
+		t.Fatal("invalid replacement discarded the current pin")
+	}
+}
 
 func TestDrawPinWithFallback(t *testing.T) {
 	for _, test := range []struct {

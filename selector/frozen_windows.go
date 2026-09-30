@@ -190,7 +190,9 @@ func ShowFrozenDesktop(source image.Image, region image.Rectangle) (*Frozen, err
 	return showFrozenContent(source, region, document, true)
 }
 
-func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, content image.Image) (*Frozen, error) {
+// An optional initial scale preserves the display scale when reopening a pin.
+// Omit it (or use zero) to fit content inside the region without enlarging it.
+func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, content image.Image, initialScale ...float64) (*Frozen, error) {
 	desktop := virtualDesktopBounds()
 	if desktopSource == nil || desktopSource.Bounds().Dx() != desktop.Dx() || desktopSource.Bounds().Dy() != desktop.Dy() {
 		return nil, fmt.Errorf("frozen desktop image size must be %dx%d", desktop.Dx(), desktop.Dy())
@@ -202,17 +204,21 @@ func ShowFrozenContent(desktopSource image.Image, region image.Rectangle, conten
 	if err != nil {
 		return nil, err
 	}
-	return showFrozenContent(desktopSource, region, document, false)
+	return showFrozenContent(desktopSource, region, document, false, initialScale...)
 }
 
-func showFrozenContent(desktopSource image.Image, region image.Rectangle, document *editor.Document, editableRegion bool) (*Frozen, error) {
+func showFrozenContent(desktopSource image.Image, region image.Rectangle, document *editor.Document, editableRegion bool, initialScale ...float64) (*Frozen, error) {
 	styleUpdates := make(chan *frozenStyleRequest, 1)
 	styleEvents := make(chan editor.Style, 1)
 	regionUpdates := make(chan image.Rectangle, 1)
 	started := make(chan frozenStart, 1)
 	done := make(chan struct{})
 	desktop := virtualDesktopBounds()
-	go runFrozenWindow(desktop, region, desktopSource, document, editableRegion, styleUpdates, styleEvents, regionUpdates, started, done)
+	scale := 0.0
+	if len(initialScale) > 0 {
+		scale = initialScale[0]
+	}
+	go runFrozenWindow(desktop, region, desktopSource, document, editableRegion, scale, styleUpdates, styleEvents, regionUpdates, started, done)
 	result := <-started
 	if result.err != nil {
 		<-done
@@ -260,7 +266,7 @@ func showFrozenContent(desktopSource image.Image, region image.Rectangle, docume
 	}, nil
 }
 
-func runFrozenWindow(desktop, region image.Rectangle, source image.Image, document *editor.Document, editableRegion bool, styleUpdates chan *frozenStyleRequest, styleEvents chan editor.Style, regionUpdates chan image.Rectangle, started chan<- frozenStart, done chan<- struct{}) {
+func runFrozenWindow(desktop, region image.Rectangle, source image.Image, document *editor.Document, editableRegion bool, initialScale float64, styleUpdates chan *frozenStyleRequest, styleEvents chan editor.Style, regionUpdates chan image.Rectangle, started chan<- frozenStart, done chan<- struct{}) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(done)
@@ -294,6 +300,9 @@ func runFrozenWindow(desktop, region image.Rectangle, source image.Image, docume
 	if !editableRegion {
 		viewport = editor.Fit(document.Bounds().Size(), localRegion.Size())
 		viewport.Offset = viewport.Offset.Add(localRegion.Min)
+		if initialScale > 0 {
+			viewport = editor.Viewport{Scale: initialScale, Offset: localRegion.Min}
+		}
 	}
 	state := &frozenState{selectionState: selection, source: source, region: localRegion, document: document, viewport: viewport, editableRegion: editableRegion, styleUpdates: styleUpdates, styleEvents: styleEvents, regionUpdates: regionUpdates}
 	title, _ := syscall.UTF16PtrFromString("screenshot-win frozen desktop")
