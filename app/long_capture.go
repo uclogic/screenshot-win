@@ -84,7 +84,7 @@ func (runner *Runner) runLongCapture(ctx context.Context, config Config, session
 	var captureToolbar *selector.CaptureToolbar
 	var captureActions <-chan selector.Action
 	{
-		captureToolbar, err = selector.ShowCaptureToolbar(region)
+		captureToolbar, err = selector.ShowCaptureToolbarWithLayout(region, config.LongCaptureToolbar)
 		if err != nil {
 			fmt.Fprintf(runner.runtime.Stderr, "警告：长截图控制栏无法显示：%v\n", err)
 			captureToolbar = nil
@@ -151,7 +151,7 @@ captureLoop:
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图缩略图无法恢复：%v\n", err)
 					preview = nil
 				}
-				captureToolbar, err = selector.ShowCaptureToolbar(region)
+				captureToolbar, err = selector.ShowCaptureToolbarWithLayout(region, config.LongCaptureToolbar)
 				if err != nil {
 					fmt.Fprintf(runner.runtime.Stderr, "警告：长截图控制栏无法恢复：%v\n", err)
 					captureToolbar = nil
@@ -242,7 +242,7 @@ captureLoop:
 			border.Close()
 			border = nil
 		}
-		return runner.runInlineAnnotation(ctx, output, region)
+		return runner.runInlineAnnotation(ctx, output, region, config.ScreenshotToolbar)
 	case selector.ActionSaveAs:
 		if err := savePNG(finishPath, output); err != nil {
 			return err

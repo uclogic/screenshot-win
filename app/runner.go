@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"slices"
 	"time"
 
 	"screenshot-win/selector"
@@ -41,7 +42,11 @@ func NewRunner(coordinator *App, runtime Runtime) *Runner {
 	if runtime.Now == nil {
 		runtime.Now = time.Now
 	}
-	return &Runner{coordinator: coordinator, runtime: runtime, pins: selector.NewPinManager()}
+	runner := &Runner{coordinator: coordinator, runtime: runtime, pins: selector.NewPinManager()}
+	runner.pins.SetEditor(func(ctx context.Context, source image.Image, bounds image.Rectangle) (image.Image, error) {
+		return runner.editPinnedImage(ctx, source, bounds, nil)
+	})
+	return runner
 }
 
 // RunContext performs one capture session and cancels it when ctx is done.
@@ -58,6 +63,8 @@ func (runner *Runner) RunContext(ctx context.Context, config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
+	config.ScreenshotToolbar = slices.Clone(config.ScreenshotToolbar)
+	config.LongCaptureToolbar = slices.Clone(config.LongCaptureToolbar)
 	return runner.runInteractive(ctx, config)
 }
 

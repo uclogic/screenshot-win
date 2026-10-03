@@ -33,6 +33,8 @@ func (implementation LongCaptureImplementation) String() string {
 
 // Config contains the inputs for one capture session.
 type Config struct {
+	ScreenshotToolbar         []string
+	LongCaptureToolbar        []string
 	X, Y                      int
 	Width, Height             int
 	Interval                  time.Duration
@@ -42,6 +44,12 @@ type Config struct {
 }
 
 func (config Config) Validate() error {
+	if _, err := selector.ResolveToolbarLayout(selector.ScreenshotToolbar, config.ScreenshotToolbar); err != nil {
+		return err
+	}
+	if _, err := selector.ResolveToolbarLayout(selector.LongCaptureToolbar, config.LongCaptureToolbar); err != nil {
+		return err
+	}
 	if config.Interval <= 0 {
 		return fmt.Errorf("interval must be positive")
 	}

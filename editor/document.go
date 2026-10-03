@@ -21,6 +21,8 @@ const (
 	ToolRectangle Tool = iota
 	ToolArrow
 	ToolText
+	ToolLine
+	ToolDoubleArrow
 )
 
 // Style is stored on every annotation so color and width changes remain
@@ -433,16 +435,13 @@ func annotationCoverage(annotation Annotation, point image.Point) float64 {
 			strokeCoverage(distanceToSegment(point, r.Max, image.Pt(r.Min.X, r.Max.Y)), radius),
 			strokeCoverage(distanceToSegment(point, image.Pt(r.Min.X, r.Max.Y), r.Min), radius),
 		)
-	case ToolArrow:
-		coverage := strokeCoverage(distanceToSegment(point, annotation.Start, annotation.End), radius)
-		left, right, ok := arrowHead(annotation.Start, annotation.End, annotation.Style.Width)
-		if !ok {
-			return coverage
+	case ToolArrow, ToolLine, ToolDoubleArrow:
+		segments, count := LinearSegments(annotation.Tool, annotation.Start, annotation.End, annotation.Style.Width, 1)
+		coverage := 0.0
+		for _, segment := range segments[:count] {
+			coverage = math.Max(coverage, strokeCoverage(distanceToSegment(point, segment.Start, segment.End), radius))
 		}
-		return maxCoverage(coverage,
-			strokeCoverage(distanceToSegment(point, annotation.End, left), radius),
-			strokeCoverage(distanceToSegment(point, annotation.End, right), radius),
-		)
+		return coverage
 	case ToolText:
 		if annotation.mask != nil {
 			return annotation.mask.coverage(point.X-annotation.Start.X, point.Y-annotation.Start.Y)
@@ -479,33 +478,19 @@ func annotationHit(annotation Annotation, point image.Point, tolerance float64) 
 			distanceToSegment(point, image.Pt(r.Max.X, r.Min.Y), r.Max) <= radius ||
 			distanceToSegment(point, r.Max, image.Pt(r.Min.X, r.Max.Y)) <= radius ||
 			distanceToSegment(point, image.Pt(r.Min.X, r.Max.Y), r.Min) <= radius
-	case ToolArrow:
-		if distanceToSegment(point, annotation.Start, annotation.End) <= radius {
-			return true
+	case ToolArrow, ToolLine, ToolDoubleArrow:
+		segments, count := LinearSegments(annotation.Tool, annotation.Start, annotation.End, annotation.Style.Width, 1)
+		for _, segment := range segments[:count] {
+			if distanceToSegment(point, segment.Start, segment.End) <= radius {
+				return true
+			}
 		}
-		left, right, ok := arrowHead(annotation.Start, annotation.End, annotation.Style.Width)
-		if !ok {
-			return false
-		}
-		return distanceToSegment(point, annotation.End, left) <= radius || distanceToSegment(point, annotation.End, right) <= radius
+		return false
 	case ToolText:
 		return point.In(expandRectangle(AnnotationBounds(annotation), int(math.Ceil(radius))))
 	default:
 		return false
 	}
-}
-
-func arrowHead(start, end image.Point, width float64) (image.Point, image.Point, bool) {
-	dx, dy := float64(end.X-start.X), float64(end.Y-start.Y)
-	length := math.Hypot(dx, dy)
-	if length == 0 {
-		return image.Point{}, image.Point{}, false
-	}
-	head := math.Min(18+width*2, length*.45)
-	ux, uy := dx/length, dy/length
-	left := image.Pt(int(math.Round(float64(end.X)-ux*head-uy*head*.55)), int(math.Round(float64(end.Y)-uy*head+ux*head*.55)))
-	right := image.Pt(int(math.Round(float64(end.X)-ux*head+uy*head*.55)), int(math.Round(float64(end.Y)-uy*head-ux*head*.55)))
-	return left, right, true
 }
 
 // AnnotationBounds returns the original-image bounding box of an annotation.
@@ -517,15 +502,14 @@ func AnnotationBounds(annotation Annotation) image.Rectangle {
 		}
 		scale := max(1, int(math.Round(annotation.Style.Width)))
 		return image.Rect(annotation.Start.X, annotation.Start.Y, annotation.Start.X+len([]rune(annotation.Text))*6*scale, annotation.Start.Y+8*scale)
-	case ToolArrow:
-		points := []image.Point{annotation.Start, annotation.End}
-		if left, right, ok := arrowHead(annotation.Start, annotation.End, annotation.Style.Width); ok {
-			points = append(points, left, right)
-		}
-		minimum, maximum := points[0], points[0]
-		for _, point := range points[1:] {
-			minimum.X, minimum.Y = min(minimum.X, point.X), min(minimum.Y, point.Y)
-			maximum.X, maximum.Y = max(maximum.X, point.X), max(maximum.Y, point.Y)
+	case ToolArrow, ToolLine, ToolDoubleArrow:
+		segments, count := LinearSegments(annotation.Tool, annotation.Start, annotation.End, annotation.Style.Width, 1)
+		minimum, maximum := annotation.Start, annotation.Start
+		for _, segment := range segments[:count] {
+			for _, point := range [2]image.Point{segment.Start, segment.End} {
+				minimum.X, minimum.Y = min(minimum.X, point.X), min(minimum.Y, point.Y)
+				maximum.X, maximum.Y = max(maximum.X, point.X), max(maximum.Y, point.Y)
+			}
 		}
 		radius := int(math.Ceil(math.Max(.5, annotation.Style.Width/2)))
 		return image.Rect(minimum.X-radius, minimum.Y-radius, maximum.X+radius+1, maximum.Y+radius+1)
@@ -569,7 +553,7 @@ func clampedTranslation(minimum, maximum, delta, boundMinimum, boundMaximum int)
 func TransformTo(annotation Annotation, handle TransformHandle, point image.Point, bounds image.Rectangle) Annotation {
 	point = clampTransformPoint(bounds, point)
 	switch annotation.Tool {
-	case ToolArrow:
+	case ToolArrow, ToolLine, ToolDoubleArrow:
 		if handle == HandleArrowStart {
 			annotation.Start = point
 		} else if handle == HandleArrowEnd {

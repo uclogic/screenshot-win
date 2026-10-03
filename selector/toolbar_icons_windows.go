@@ -388,3 +388,16 @@ func (renderer *toolbarIconRenderer) drawFallbackColorDot(left, top, diameter in
 	defer procSelectObject.Call(renderer.dc, oldPen)
 	procEllipse.Call(renderer.dc, uintptr(left), uintptr(top), uintptr(left+diameter), uintptr(top+diameter))
 }
+
+// DrawToolbarIcon draws a dark settings preview of a capture toolbar glyph into a Windows DC.
+// The caller owns the DC and clipping region. Pale ink is used for drag previews.
+func DrawToolbarIcon(dc uintptr, bounds image.Rectangle, action Action, dpi int, pale bool) {
+	renderer := newToolbarIconRenderer(dc)
+	defer renderer.close()
+	ink := color.NRGBA{R: 48, G: 56, B: 68, A: 255}
+	if pale {
+		ink = color.NRGBA{R: 110, G: 122, B: 138, A: 255}
+	}
+	renderer.ink = &ink
+	renderer.draw(action, bounds, true, editor.DefaultStyle(), dpi)
+}

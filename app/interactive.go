@@ -87,7 +87,7 @@ func (runner *Runner) runInteractive(ctx context.Context, config Config) error {
 		frozen.Close()
 		return err
 	}
-	toolbar, err := selector.ShowToolbarContext(ctx, region, frozen.WindowHandle(), frozen.Background)
+	toolbar, err := selector.ShowToolbarContextWithLayout(ctx, region, frozen.WindowHandle(), config.ScreenshotToolbar, frozen.Background)
 	if err != nil {
 		frozen.Close()
 		return err
@@ -199,13 +199,19 @@ func runActionMenu(region image.Rectangle, snapshot image.Image, operations inte
 		case selector.ActionScroll:
 			outputRegion, output := currentCapture(region, snapshot, operations)
 			return actionResult{action: action, region: outputRegion, size: output.Bounds().Size()}, nil
-		case selector.ActionRectangle, selector.ActionArrow, selector.ActionText:
+		case selector.ActionRectangle, selector.ActionArrow, selector.ActionLine, selector.ActionDoubleArrow, selector.ActionText:
 			if operations.annotate == nil {
 				return actionResult{}, errorsMissingOperation("annotate image")
 			}
 			tool := editor.ToolRectangle
 			if action == selector.ActionArrow {
 				tool = editor.ToolArrow
+			}
+			if action == selector.ActionLine {
+				tool = editor.ToolLine
+			}
+			if action == selector.ActionDoubleArrow {
+				tool = editor.ToolDoubleArrow
 			}
 			if action == selector.ActionText {
 				tool = editor.ToolText

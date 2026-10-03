@@ -31,6 +31,8 @@ const (
 	ActionText
 	ActionColor
 	ActionWidth
+	ActionLine
+	ActionDoubleArrow
 )
 
 const (
@@ -38,9 +40,9 @@ const (
 )
 
 var (
-	selectionToolbarActions  = []Action{ActionCancel, ActionScroll, ActionRectangle, ActionArrow, ActionText, ActionColor, ActionWidth, ActionPin, ActionSave, ActionCopy}
-	annotationToolbarActions = []Action{ActionCancel, ActionRectangle, ActionArrow, ActionText, ActionColor, ActionWidth, ActionPin, ActionSave, ActionCopy}
-	captureToolbarActions    = []Action{ActionCancel, ActionEdit, ActionPin, ActionSaveAs, ActionCopy}
+	selectionToolbarActions  = []Action{ActionRectangle, ActionArrow, ActionText, ActionColor, ActionWidth, ActionScroll, ActionPin, ActionSave, ActionCopy, ActionCancel}
+	annotationToolbarActions = []Action{ActionRectangle, ActionArrow, ActionText, ActionColor, ActionWidth, ActionPin, ActionSave, ActionCopy, ActionCancel}
+	captureToolbarActions    = []Action{ActionEdit, ActionPin, ActionSaveAs, ActionCopy, ActionCancel}
 )
 
 // ToolbarEvent is emitted for both commands and explicit style selections.

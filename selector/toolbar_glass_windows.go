@@ -10,7 +10,6 @@ import (
 	"time"
 	"unsafe"
 
-	"screenshot-win/editor"
 	"screenshot-win/internal/ui/glass"
 )
 
@@ -50,7 +49,6 @@ type glassWindow struct {
 	dirty                 bool
 	fetch                 backdropFetch
 	nextSample            time.Time
-	levels                []glass.Transition
 }
 
 func (window *glassWindow) close() {
@@ -79,7 +77,11 @@ func (state *toolbarState) actionAt(point image.Point) (Action, bool) {
 
 func (state *toolbarState) panelOptionAt(point image.Point) (int, bool) {
 	m := glass.Margin(state.dpi)
-	return stylePanelOptionAt(point.Sub(image.Pt(m, m)), state.panel.field, state.dpi)
+	point = point.Sub(image.Pt(m, m))
+	if state.panel.format {
+		return arrowFormatOptionAt(point, state.dpi)
+	}
+	return stylePanelOptionAt(point, state.panel.field, state.dpi)
 }
 
 func (state *toolbarState) inkColor() color.NRGBA {
@@ -153,10 +155,7 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 	count := len(state.actions)
 	if panel {
 		window, bounds, radius = &state.panel.glassWindow, state.panel.bounds, float64(glass.Scale(12, state.dpi))
-		count = len(editor.PresetColors())
-		if state.panel.field == editor.StyleFieldWidth {
-			count = len(editor.PresetWidths())
-		}
+		count = state.panelOptionCount()
 	}
 	if window.bounds.Size() != bounds.Size() || window.frame == nil {
 		window.close()
@@ -167,7 +166,6 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 			return err
 		}
 		window.frame = image.NewRGBA(window.surface.client)
-		window.levels = make([]glass.Transition, count*3)
 	}
 	// Moving keeps the existing material and native surface visible while the
 	// new screen location is sampled asynchronously.
@@ -219,27 +217,18 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 	now := time.Now()
 	animating := false
 	var frames []toolbarMotionFrame
-	if !panel {
+	if panel {
+		frames, animating = state.panelMotionFrames(now)
+	} else {
 		frames, animating = state.motionFrames(now)
 	}
-	for i := 0; i < count; i++ {
+	for i, frame := range frames {
 		button := state.buttonRect(i)
-		if !panel {
-			f := frames[i]
-			colors := toolbarMotionColors()
-			for j, amount := range []float64{f.hover, f.selected, f.press} {
-				glass.Overlay(window.frame, button.Inset(glass.Scale(2, state.dpi)), float64(glass.Scale(10, state.dpi)), colors[j], amount)
-			}
-			continue
+		if panel {
+			button = state.styleOptionRect(i)
 		}
-		button = state.styleOptionRect(i)
-		hover := i == state.panel.hoverIndex || i == state.panel.keyIndex
-		selected := i == state.currentPanelIndex()
-		pressed := i == state.panel.pressedIndex && i == state.panel.hoverIndex
-		colors := []color.NRGBA{glass.Light.Hover, glass.Light.Selected, {35, 75, 130, 55}}
-		for j, on := range []bool{hover, selected, pressed} {
-			amount, active := window.levels[i*3+j].Update(on, now)
-			animating = animating || active
+		colors := toolbarMotionColors()
+		for j, amount := range []float64{frame.hover, frame.selected, frame.press} {
 			glass.Overlay(window.frame, button.Inset(glass.Scale(2, state.dpi)), float64(glass.Scale(10, state.dpi)), colors[j], amount)
 		}
 	}
@@ -251,7 +240,7 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 	}
 	if panel {
 		for i := 0; i < count; i++ {
-			state.drawStyleOption(window.surface.memoryDC, i)
+			state.drawStyleOption(window.surface.memoryDC, i, frames[i])
 		}
 	} else {
 		renderer := newToolbarIconRenderer(window.surface.memoryDC)
@@ -259,7 +248,7 @@ func (state *toolbarState) paintGlass(hwnd uintptr, panel bool) error {
 			ink := frames[i].ink()
 			renderer.ink = &ink
 			renderer.motion = &frames[i]
-			renderer.draw(action, state.buttonRect(i), toolbarActionEnabled(action), state.style, state.dpi)
+			state.drawToolbarIcon(renderer, action, state.buttonRect(i), toolbarActionEnabled(action))
 		}
 		renderer.close()
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestLegacyToolbarTransparencyIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value != defaultPreferences() {
+	if !reflect.DeepEqual(value, defaultPreferences()) {
 		t.Fatalf("legacy settings: %+v", value)
 	}
 	if err := savePreferences(path, value); err != nil {
@@ -93,7 +94,7 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 	data, err := os.ReadFile(path)
@@ -136,7 +137,7 @@ func TestLoadPreferencesReturnsDefaultsAndErrorForInvalidFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("invalid TOML was accepted")
 	}
-	if got != defaultPreferences() {
+	if !reflect.DeepEqual(got, defaultPreferences()) {
 		t.Fatalf("invalid TOML returned %+v, want defaults", got)
 	}
 }
@@ -161,7 +162,7 @@ func TestConfiguredHotkeyParsingAndFormatting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := formatConfiguredHotkey(value), "Ctrl+Shift+F11"; got != want {
+	if got, want := formatConfiguredHotkey(value), "Ctrl+Shift+F11"; !reflect.DeepEqual(got, want) {
 		t.Fatalf("formatted hotkey = %q, want %q", got, want)
 	}
 	for _, invalid := range []string{"A", "Ctrl", "Ctrl+A+B", "Win+A", "Ctrl+NoSuchKey"} {
@@ -188,7 +189,7 @@ func TestPreferencesApplyCaptureSettings(t *testing.T) {
 func TestSettingsPathUsesExecutableDirectory(t *testing.T) {
 	got := settingsPathForExecutable(filepath.Join("opt", "screenshot-win", "screenshot-win.exe"))
 	want := filepath.Join("opt", "screenshot-win", settingsFileName)
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings path = %q, want %q", got, want)
 	}
 }
@@ -209,7 +210,7 @@ func TestEveryLanguageCatalogContainsEnglishKeys(t *testing.T) {
 }
 
 func TestLocalizationFallsBackToEnglish(t *testing.T) {
-	if got, want := localize("unknown", textSettings), "Settings"; got != want {
+	if got, want := localize("unknown", textSettings), "Settings"; !reflect.DeepEqual(got, want) {
 		t.Fatalf("fallback = %q, want %q", got, want)
 	}
 }
@@ -329,5 +330,69 @@ func TestPreferencesIgnoreRemovedDiagnostics(t *testing.T) {
 	}
 	if strings.Contains(string(saved), "diagnostics") {
 		t.Fatalf("saved removed settings: %s", saved)
+	}
+}
+
+func TestToolbarPreferencesRoundTripAndIsolation(t *testing.T) {
+	value := defaultPreferences()
+	value.Toolbars.Screenshot = []string{"arrow", "copy"}
+	value.Toolbars.LongCapture = []string{"edit", "copy"}
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadPreferences(path)
+	if err != nil || !reflect.DeepEqual(loaded, value) {
+		t.Fatalf("round trip: %+v %v", loaded, err)
+	}
+	config := loaded.apply(application.Config{})
+	loaded.Toolbars.Screenshot[0] = "cancel"
+	loaded.Toolbars.LongCapture[0] = "cancel"
+	if !reflect.DeepEqual(config.ScreenshotToolbar, []string{"arrow", "copy"}) || !reflect.DeepEqual(config.LongCaptureToolbar, []string{"edit", "copy"}) {
+		t.Fatal("config shares settings arrays")
+	}
+	other := defaultPreferences()
+	other.Toolbars.Screenshot[0] = "cancel"
+	if defaultPreferences().Toolbars.Screenshot[0] != "rectangle" {
+		t.Fatal("default preferences share arrays")
+	}
+}
+
+func TestToolbarPreferencesLegacyAndInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := os.WriteFile(path, []byte("[toolbars]\nscreenshot=['copy']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadPreferences(path)
+	if err != nil || !reflect.DeepEqual(loaded.Toolbars.LongCapture, selector.DefaultToolbarLayout(selector.LongCaptureToolbar)) {
+		t.Fatalf("missing field defaults: %+v %v", loaded, err)
+	}
+	for _, content := range []string{
+		"[toolbars]\nscreenshot=[]\n",
+		"[toolbars]\nscreenshot=['cancel']\n",
+		"[toolbars]\nscreenshot=['copy','copy']\n",
+		"[toolbars]\nscreenshot=['copy','unknown']\n",
+		"[toolbars]\nscreenshot=['edit']\n",
+		"[toolbars]\nlong_capture=['save']\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadPreferences(path); err == nil {
+			t.Fatalf("accepted config %s", content)
+		}
+	}
+}
+
+func TestToolbarPreferencesSavingNilUsesDefaults(t *testing.T) {
+	value := defaultPreferences()
+	value.Toolbars = toolbarPreferences{}
+	path := filepath.Join(t.TempDir(), settingsFileName)
+	if err := savePreferences(path, value); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadPreferences(path)
+	if err != nil || !reflect.DeepEqual(got, defaultPreferences()) {
+		t.Fatalf("nil layout round trip: %+v %v", got, err)
 	}
 }

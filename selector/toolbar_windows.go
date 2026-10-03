@@ -155,6 +155,7 @@ type toolbarState struct {
 	persistent     bool
 	ready          bool
 	active         bool
+	arrowAction    Action
 	activeAction   Action
 	pending        bool
 	pendingAction  Action
@@ -175,6 +176,9 @@ type toolbarState struct {
 }
 
 type stylePanel struct {
+	motions      []toolbarMotion
+	keyFocused   bool
+	format       bool
 	glassWindow  glassWindow
 	pressedIndex int
 	hwnd         uintptr
@@ -209,11 +213,27 @@ func ShowToolbar(region image.Rectangle) (Action, error) {
 
 // ShowToolbarContext creates a persistent toolbar for a normal screenshot.
 func ShowToolbarContext(ctx context.Context, region image.Rectangle, shortcutTarget uintptr, background ...ToolbarBackground) (*ActionToolbar, error) {
-	return showToolbarContext(ctx, region, selectionToolbarActions, []string{"Cancel", "Scrolling capture", "Rectangle", "Arrow", "Text", "Color", "Line width", "Pin to desktop", "Save", "Copy"}, shortcutTarget, background...)
+	return ShowToolbarContextWithLayout(ctx, region, shortcutTarget, nil, background...)
 }
 
 func ShowAnnotationToolbarContext(ctx context.Context, region image.Rectangle, shortcutTarget uintptr, background ...ToolbarBackground) (*ActionToolbar, error) {
-	return showToolbarContext(ctx, region, annotationToolbarActions, []string{"Cancel", "Rectangle", "Arrow", "Text", "Color", "Line width", "Pin to desktop", "Save", "Copy"}, shortcutTarget, background...)
+	return ShowAnnotationToolbarContextWithLayout(ctx, region, shortcutTarget, nil, background...)
+}
+
+func ShowToolbarContextWithLayout(ctx context.Context, region image.Rectangle, shortcutTarget uintptr, layout []string, background ...ToolbarBackground) (*ActionToolbar, error) {
+	actions, labels, err := toolbarLayoutActions(ScreenshotToolbar, layout, false)
+	if err != nil {
+		return nil, err
+	}
+	return showToolbarContext(ctx, region, actions, labels, shortcutTarget, background...)
+}
+
+func ShowAnnotationToolbarContextWithLayout(ctx context.Context, region image.Rectangle, shortcutTarget uintptr, layout []string, background ...ToolbarBackground) (*ActionToolbar, error) {
+	actions, labels, err := toolbarLayoutActions(ScreenshotToolbar, layout, true)
+	if err != nil {
+		return nil, err
+	}
+	return showToolbarContext(ctx, region, actions, labels, shortcutTarget, background...)
 }
 
 func showToolbarContext(ctx context.Context, region image.Rectangle, actions []Action, labels []string, shortcutTarget uintptr, background ...ToolbarBackground) (*ActionToolbar, error) {
@@ -349,10 +369,18 @@ func runActionToolbarWindow(ctx context.Context, region image.Rectangle, actions
 // ShowCaptureToolbar displays the persistent long-capture action bar without
 // taking focus from the window being scrolled.
 func ShowCaptureToolbar(region image.Rectangle) (*CaptureToolbar, error) {
+	return ShowCaptureToolbarWithLayout(region, nil)
+}
+
+func ShowCaptureToolbarWithLayout(region image.Rectangle, layout []string) (*CaptureToolbar, error) {
+	items, labels, err := toolbarLayoutActions(LongCaptureToolbar, layout, false)
+	if err != nil {
+		return nil, err
+	}
 	started := make(chan captureToolbarStart, 1)
 	done := make(chan struct{})
 	actions := make(chan Action, 1)
-	go runCaptureToolbarWindow(region, started, actions, done)
+	go runCaptureToolbarWindow(region, items, labels, started, actions, done)
 	result := <-started
 	if result.err != nil {
 		<-done
@@ -376,7 +404,7 @@ func ShowCaptureToolbar(region image.Rectangle) (*CaptureToolbar, error) {
 	}, nil
 }
 
-func runCaptureToolbarWindow(region image.Rectangle, started chan<- captureToolbarStart, selected chan<- Action, done chan<- struct{}) {
+func runCaptureToolbarWindow(region image.Rectangle, items []Action, labels []string, started chan<- captureToolbarStart, selected chan<- Action, done chan<- struct{}) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(done)
@@ -411,7 +439,7 @@ func runCaptureToolbarWindow(region image.Rectangle, started chan<- captureToolb
 
 	state := &toolbarState{
 		action: ActionCancel, capture: true, glassEnabled: true, region: region,
-		actions: captureToolbarActions, labels: []string{"Cancel", "Stop and annotate", "Pin to desktop", "Save as", "Copy"},
+		actions: items, labels: labels,
 		style: editor.DefaultStyle(), instance: instance, workArea: workArea, dpi: 96,
 	}
 	state.clientSize = glassToolbarSize(len(state.actions), state.dpi)
@@ -649,12 +677,17 @@ func toolbarWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr
 			}
 		}
 		if ok && toolbarActionEnabled(action) {
+			if state.persistent && action == ActionArrow && state.active && arrowFormatAction(state.activeAction) {
+				state.toggleArrowPanel()
+				return 0
+			}
 			if state.persistent && (action == ActionColor || action == ActionWidth) {
 				state.toggleStylePanel(action)
 				return 0
 			}
 			if state.persistent {
-				state.focusDrawingSurface(action)
+				// Keep focus here while choosing tools. The canvas activates on
+				// its own mouse-down; keyboard shortcuts are forwarded below.
 				if state.handlePersistentAction(action) {
 					procInvalidateRect.Call(hwnd, 0, 0)
 				}
@@ -766,6 +799,8 @@ func (state *toolbarState) createTooltips(instance uintptr) error {
 
 func (state *toolbarState) tooltipLabel(action Action, fallback string) string {
 	switch action {
+	case ActionArrow:
+		return fallback
 	case ActionColor:
 		return "Color: " + annotationColorName(state.style.Color)
 	case ActionWidth:
@@ -780,7 +815,7 @@ func (state *toolbarState) updateStyleTooltips() {
 		return
 	}
 	for index, action := range state.actions {
-		if action != ActionColor && action != ActionWidth {
+		if action != ActionColor && action != ActionWidth && action != ActionArrow {
 			continue
 		}
 		label := state.tooltipLabel(action, state.labels[index])
@@ -859,11 +894,15 @@ func (state *toolbarState) applyQueuedStyle() {
 	procInvalidateRect.Call(state.hwnd, 0, 0)
 	if state.panel.hwnd != 0 {
 		state.panel.keyIndex = state.currentPanelIndex()
+		state.panelMotionFrames(time.Now())
 		procInvalidateRect.Call(state.panel.hwnd, 0, 0)
 	}
 }
 
 func (state *toolbarState) currentPanelIndex() int {
+	if state.panel.format {
+		return arrowFormatIndex(state.arrowAction)
+	}
 	switch state.panel.field {
 	case editor.StyleFieldColor:
 		for index, value := range editor.PresetColors() {
@@ -892,11 +931,22 @@ func (state *toolbarState) actionButtonBounds(action Action) (image.Rectangle, b
 }
 
 func (state *toolbarState) toggleStylePanel(action Action) {
+	state.togglePanel(action, false)
+}
+
+func (state *toolbarState) toggleArrowPanel() {
+	state.togglePanel(ActionArrow, true)
+}
+
+func (state *toolbarState) togglePanel(action Action, format bool) {
 	field := editor.StyleFieldColor
 	if action == ActionWidth {
 		field = editor.StyleFieldWidth
 	}
-	if state.panel.hwnd != 0 && state.panel.field == field {
+	if format {
+		field = editor.StyleFieldNone
+	}
+	if state.panel.hwnd != 0 && state.panel.field == field && state.panel.format == format {
 		state.closeStylePanel()
 		return
 	}
@@ -906,6 +956,9 @@ func (state *toolbarState) toggleStylePanel(action Action) {
 		return
 	}
 	size := stylePanelSize(field, state.dpi)
+	if format {
+		size = arrowFormatPanelSize(state.dpi)
+	}
 	size = size.Add(image.Pt(2*glass.Margin(state.dpi), 2*glass.Margin(state.dpi)))
 	bounds := stylePanelBounds(anchor, state.workArea, size, scaleForDPI(4, state.dpi))
 	className, _ := syscall.UTF16PtrFromString("ScreenshotWinActionToolbar")
@@ -924,8 +977,9 @@ func (state *toolbarState) toggleStylePanel(action Action) {
 		state.renderErr = win32Error("CreateWindowExW style panel", callErr)
 		return
 	}
-	state.panel = stylePanel{hwnd: hwnd, field: field, bounds: bounds, hoverIndex: -1, pressedIndex: -1}
+	state.panel = stylePanel{hwnd: hwnd, field: field, format: format, bounds: bounds, hoverIndex: -1, pressedIndex: -1}
 	state.panel.keyIndex = state.currentPanelIndex()
+	state.panelMotionFrames(time.Now())
 	toolbarStates.Store(hwnd, state)
 	if state.glassEnabled {
 		state.paintGlassOrFallback(hwnd, true)
@@ -961,7 +1015,12 @@ func (state *toolbarState) panelWindowProcedure(hwnd uintptr, message uint32, wP
 		if state.glassEnabled && !state.glassContains(mousePoint(lParam).Sub(state.panel.bounds.Min), true) {
 			return ^uintptr(0)
 		}
+	case wmMouseLeave:
+		state.panel.hoverIndex = -1
+		procInvalidateRect.Call(hwnd, 0, 0)
+		return 0
 	case wmMouseMove:
+		state.panel.keyFocused = false
 		index, ok := state.panelOptionAt(mousePoint(lParam))
 		if !ok {
 			index = -1
@@ -987,7 +1046,6 @@ func (state *toolbarState) panelWindowProcedure(hwnd uintptr, message uint32, wP
 				if action == ActionColor || action == ActionWidth {
 					state.toggleStylePanel(action)
 				} else {
-					state.focusDrawingSurface(action)
 					state.handlePersistentAction(action)
 				}
 			}
@@ -1014,10 +1072,7 @@ func (state *toolbarState) panelWindowProcedure(hwnd uintptr, message uint32, wP
 }
 
 func (state *toolbarState) handlePanelKey(key uintptr) bool {
-	count := len(editor.PresetColors())
-	if state.panel.field == editor.StyleFieldWidth {
-		count = len(editor.PresetWidths())
-	}
+	count := state.panelOptionCount()
 	switch key {
 	case vkLeft, vkUp:
 		state.panel.keyIndex = (state.panel.keyIndex + count - 1) % count
@@ -1029,11 +1084,23 @@ func (state *toolbarState) handlePanelKey(key uintptr) bool {
 	default:
 		return false
 	}
+	state.panel.keyFocused = true
 	procInvalidateRect.Call(state.panel.hwnd, 0, 0)
 	return true
 }
 
 func (state *toolbarState) choosePanelOption(index int) {
+	if state.panel.format {
+		if index < 0 || index >= len(arrowFormats) {
+			return
+		}
+		state.arrowAction = arrowFormats[index].action
+		state.updateStyleTooltips()
+		state.closeStylePanel()
+		state.handlePersistentAction(state.arrowAction)
+		procInvalidateRect.Call(state.hwnd, 0, 0)
+		return
+	}
 	change := editor.StyleChange{Field: state.panel.field, Style: state.style}
 	action := ActionColor
 	switch state.panel.field {
@@ -1097,19 +1164,19 @@ func (state *toolbarState) drawStylePanel(dc uintptr) error {
 	defer procDeleteObject.Call(background)
 	area := rect{0, 0, int32(state.panel.bounds.Dx()), int32(state.panel.bounds.Dy())}
 	procFillRect.Call(dc, uintptr(unsafe.Pointer(&area)), background)
-	count := len(editor.PresetColors())
-	if state.panel.field == editor.StyleFieldWidth {
-		count = len(editor.PresetWidths())
+	frames, active := state.panelMotionFrames(time.Now())
+	if active {
+		procFrozenSetTimer.Call(state.hwnd, glassFrameTimer, 16, 0)
 	}
-	for index := 0; index < count; index++ {
-		state.drawStyleOption(dc, index)
+	for index, frame := range frames {
+		state.drawStyleOption(dc, index, frame)
 	}
 	return nil
 }
 
 func (state *toolbarState) styleOptionRect(index int) image.Rectangle {
 	padding := scaleForDPI(4, state.dpi)
-	if state.panel.field == editor.StyleFieldColor {
+	if state.panel.format || state.panel.field == editor.StyleFieldColor {
 		cell := scaleForDPI(36, state.dpi)
 		return image.Rect(padding+index*cell, padding, padding+(index+1)*cell, padding+cell).Add(image.Pt(glass.Margin(state.dpi), glass.Margin(state.dpi)))
 	}
@@ -1117,25 +1184,23 @@ func (state *toolbarState) styleOptionRect(index int) image.Rectangle {
 	return image.Rect(padding, padding+index*cell, state.panel.bounds.Dx()-2*glass.Margin(state.dpi)-padding, padding+(index+1)*cell).Add(image.Pt(glass.Margin(state.dpi), glass.Margin(state.dpi)))
 }
 
-func (state *toolbarState) drawStyleOption(dc uintptr, index int) {
+func (state *toolbarState) drawStyleOption(dc uintptr, index int, frame toolbarMotionFrame) {
 	option := state.styleOptionRect(index)
-	selected := index == state.currentIndexForField()
-	if !state.glassEnabled && (selected || index == state.panel.hoverIndex || index == state.panel.keyIndex) {
-		fill := rgb(225, 234, 245)
-		if selected {
-			fill = rgb(195, 218, 249)
-		}
-		brush, _, _ := procCreateSolidBrush.Call(fill)
-		if brush != 0 {
-			area := rect{int32(option.Min.X), int32(option.Min.Y), int32(option.Max.X), int32(option.Max.Y)}
-			procFillRect.Call(dc, uintptr(unsafe.Pointer(&area)), brush)
-			procDeleteObject.Call(brush)
-		}
+	if !state.glassEnabled {
+		state.drawMotionBackgroundRect(dc, option, frame)
 	}
 	center := image.Pt((option.Min.X+option.Max.X)/2, (option.Min.Y+option.Max.Y)/2)
-	if state.panel.field == editor.StyleFieldColor {
+	if state.panel.format {
+		renderer := newToolbarIconRenderer(dc)
+		ink := state.inkColor()
+		renderer.ink = &ink
+		renderer.motion = &frame
+		renderer.draw(arrowFormats[index].action, option, true, state.style, state.dpi)
+		renderer.close()
+	} else if state.panel.field == editor.StyleFieldColor {
 		value := editor.PresetColors()[index]
-		radius := scaleForDPI(9, state.dpi)
+		radius := int(math.Round(float64(scaleForDPI(9, state.dpi)) * frame.scale))
+		center.Y += int(math.Round(frame.y * float64(state.dpi) / 96))
 		brush, _, _ := procCreateSolidBrush.Call(rgb(value.R, value.G, value.B))
 		pen, _, _ := procCreatePen.Call(psSolid, 1, rgb(22, 24, 28))
 		if brush != 0 && pen != 0 {
@@ -1178,25 +1243,6 @@ func (state *toolbarState) drawStyleOption(dc uintptr, index int) {
 		procSetTextColor.Call(dc, rgb(ink.R, ink.G, ink.B))
 		procTextOut.Call(dc, uintptr(option.Min.X+scaleForDPI(96, state.dpi)), uintptr(center.Y-scaleForDPI(8, state.dpi)), uintptr(unsafe.Pointer(&label[0])), uintptr(len(label)-1))
 	}
-	if selected {
-		ink := state.inkColor()
-		pen, _, _ := procCreatePen.Call(psSolid, uintptr(max(2, scaleForDPI(2, state.dpi))), rgb(ink.R, ink.G, ink.B))
-		if pen != 0 {
-			oldPen, _, _ := procSelectObject.Call(dc, pen)
-			x := option.Max.X - scaleForDPI(10, state.dpi)
-			y := option.Min.Y + scaleForDPI(9, state.dpi)
-			line(dc, x-scaleForDPI(5, state.dpi), y+scaleForDPI(5, state.dpi), x-scaleForDPI(1, state.dpi), y+scaleForDPI(9, state.dpi))
-			line(dc, x-scaleForDPI(1, state.dpi), y+scaleForDPI(9, state.dpi), x+scaleForDPI(6, state.dpi), y)
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}
-	}
-}
-
-func (state *toolbarState) currentIndexForField() int {
-	field := state.panel.field
-	state.panel.field = field
-	return state.currentPanelIndex()
 }
 
 func (state *toolbarState) emitPersistentAction(action Action) bool {
@@ -1206,27 +1252,12 @@ func (state *toolbarState) emitPersistentAction(action Action) bool {
 	select {
 	case state.events <- ToolbarEvent{Action: action, Style: state.style}:
 		state.ready = false
-		state.active = action == ActionRectangle || action == ActionArrow || action == ActionText
+		state.active = drawingToolAction(action)
 		state.activeAction = action
 		return true
 	default:
 		return false
 	}
-}
-
-// Request activation on the drawing window's own thread. Owned windows can
-// share an input queue across threads, making direct activation synchronous.
-func (state *toolbarState) focusDrawingSurface(action Action) {
-	if target := state.drawingSurfaceTarget(action); target != 0 {
-		procPostMessage.Call(target, wmFrozenFocus, 0, 0)
-	}
-}
-
-func (state *toolbarState) drawingSurfaceTarget(action Action) uintptr {
-	if !drawingToolAction(action) {
-		return 0
-	}
-	return state.shortcutTarget
 }
 
 func drawingToolAction(action Action) bool {
@@ -1240,6 +1271,10 @@ func drawingToolForAction(action Action) (editor.Tool, bool) {
 		return editor.ToolRectangle, true
 	case ActionArrow:
 		return editor.ToolArrow, true
+	case ActionLine:
+		return editor.ToolLine, true
+	case ActionDoubleArrow:
+		return editor.ToolDoubleArrow, true
 	case ActionText:
 		return editor.ToolText, true
 	default:
@@ -1260,6 +1295,9 @@ func packToolStyle(tool editor.Tool, style editor.Style) (uintptr, uintptr) {
 // pin, cancel, and the other drawing tools all be clicked without first
 // cancelling the active drawing tool.
 func (state *toolbarState) handlePersistentAction(action Action) bool {
+	if action == ActionArrow {
+		action = currentArrowAction(state.arrowAction)
+	}
 	if state.emitPersistentAction(action) {
 		return true
 	}
@@ -1384,7 +1422,7 @@ func (state *toolbarState) draw(dc uintptr) error {
 			state.drawMotionBackground(dc, index, frame)
 			ink := frame.ink()
 			iconRenderer.ink, iconRenderer.motion = &ink, &frame
-			iconRenderer.draw(action, button, enabled, state.style, state.dpi)
+			state.drawToolbarIcon(iconRenderer, action, button, enabled)
 			continue
 		}
 		if (state.active && state.activeAction == action) || (state.hovering && state.hover == action) {
@@ -1407,7 +1445,7 @@ func (state *toolbarState) draw(dc uintptr) error {
 				procDeleteObject.Call(brush)
 			}
 		}
-		iconRenderer.draw(action, button, enabled, state.style, state.dpi)
+		state.drawToolbarIcon(iconRenderer, action, button, enabled)
 	}
 	return nil
 }

@@ -282,20 +282,6 @@ func TestPersistentToolbarAcceptsOneActionUntilRearmed(t *testing.T) {
 	}
 }
 
-func TestToolbarFocusesDrawingSurfaceOnlyForDrawingTools(t *testing.T) {
-	state := &toolbarState{shortcutTarget: 0x12345}
-	for _, action := range []Action{ActionRectangle, ActionArrow, ActionText} {
-		if got := state.drawingSurfaceTarget(action); got != state.shortcutTarget {
-			t.Fatalf("drawing action %v target = %#x, want %#x", action, got, state.shortcutTarget)
-		}
-	}
-	for _, action := range []Action{ActionCancel, ActionSave, ActionCopy, ActionScroll, ActionColor, ActionWidth, ActionPin} {
-		if got := state.drawingSurfaceTarget(action); got != 0 {
-			t.Fatalf("command action %v target = %#x, want zero", action, got)
-		}
-	}
-}
-
 func TestPersistentToolbarQueuesLatestDrawingToolSwitchUntilRearmed(t *testing.T) {
 	events := make(chan ToolbarEvent, 1)
 	state := &toolbarState{persistent: true, ready: true, events: events}

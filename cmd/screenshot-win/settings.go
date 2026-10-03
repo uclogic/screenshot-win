@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,13 @@ const (
 	longCaptureModeLegacy        = "legacy"
 )
 
+type toolbarPreferences struct {
+	Screenshot  []string `toml:"screenshot"`
+	LongCapture []string `toml:"long_capture"`
+}
+
 type preferences struct {
+	Toolbars    toolbarPreferences     `toml:"toolbars"`
 	General     generalPreferences     `toml:"general"`
 	LongCapture longCapturePreferences `toml:"long_capture"`
 }
@@ -69,7 +76,8 @@ const (
 func defaultPreferences() preferences {
 	match := screenshotwin.DefaultMatchOptions()
 	return preferences{
-		General: generalPreferences{CandidateMode: "minimal_rectangle", Hotkey: "Alt+Shift+A", Language: languageEnglish},
+		Toolbars: toolbarPreferences{Screenshot: selector.DefaultToolbarLayout(selector.ScreenshotToolbar), LongCapture: selector.DefaultToolbarLayout(selector.LongCaptureToolbar)},
+		General:  generalPreferences{CandidateMode: "minimal_rectangle", Hotkey: "Alt+Shift+A", Language: languageEnglish},
 		LongCapture: longCapturePreferences{
 			Mode:                longCaptureModeLegacy,
 			IntervalMS:          int(defaultCaptureInterval / time.Millisecond),
@@ -109,6 +117,8 @@ func savePreferences(path string, value preferences) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
+	value.Toolbars.Screenshot, _ = selector.ResolveToolbarLayout(selector.ScreenshotToolbar, value.Toolbars.Screenshot)
+	value.Toolbars.LongCapture, _ = selector.ResolveToolbarLayout(selector.LongCaptureToolbar, value.Toolbars.LongCapture)
 	value.General.Hotkey = normalizeOptionalHotkey(value.General.Hotkey)
 	value.General.PinHotkey = normalizeOptionalHotkey(value.General.PinHotkey)
 	data, err := toml.Marshal(value)
@@ -144,6 +154,12 @@ func savePreferences(path string, value preferences) error {
 }
 
 func (value preferences) Validate() error {
+	if _, err := selector.ResolveToolbarLayout(selector.ScreenshotToolbar, value.Toolbars.Screenshot); err != nil {
+		return fmt.Errorf("screenshot toolbar: %w", err)
+	}
+	if _, err := selector.ResolveToolbarLayout(selector.LongCaptureToolbar, value.Toolbars.LongCapture); err != nil {
+		return fmt.Errorf("long capture toolbar: %w", err)
+	}
 	if candidateModeIndex(value.General.CandidateMode) < 0 {
 		return fmt.Errorf("invalid candidate mode %q", value.General.CandidateMode)
 	}
@@ -188,6 +204,8 @@ func (value preferences) Validate() error {
 }
 
 func (value preferences) apply(config application.Config) application.Config {
+	config.ScreenshotToolbar = slices.Clone(value.Toolbars.Screenshot)
+	config.LongCaptureToolbar = slices.Clone(value.Toolbars.LongCapture)
 	config.CandidateMode = selector.CandidateMode(candidateModeIndex(value.General.CandidateMode))
 	config.LongCaptureImplementation = application.LongCaptureBidirectional
 	if value.LongCapture.Mode == longCaptureModeLegacy {

@@ -3,6 +3,8 @@
 package selector
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"image"
 	"runtime"
@@ -30,6 +32,8 @@ const (
 	pinCommandOriginal = 2001
 	pinCommandClose    = 2002
 	pinCommandCopy     = 2003
+	pinCommandEdit     = 2004
+	wmPinEditComplete  = wmUser + 110
 	dibStretchHalftone = 4
 	rasterSourceCopy   = 0x00CC0020
 )
@@ -62,6 +66,8 @@ type pinStart struct {
 }
 
 type pinWindowState struct {
+	editor         PinEditor
+	editSession    *pinEditSession
 	hwnd           uintptr
 	source         image.Image
 	original       image.Point
@@ -79,10 +85,10 @@ type pinWindowState struct {
 	}
 }
 
-func showPinnedWindow(source image.Image, origin image.Point) (*Pin, error) {
+func showPinnedWindow(source image.Image, origin image.Point, edit PinEditor) (*Pin, error) {
 	started := make(chan pinStart, 1)
 	done := make(chan struct{})
-	go runPinnedWindow(source, origin, started, done)
+	go runPinnedWindow(source, origin, edit, started, done)
 	result := <-started
 	if result.err != nil {
 		<-done
@@ -118,7 +124,7 @@ func ensurePinWindowClass() (uintptr, *uint16, error) {
 	return pinClassInstance, pinClassName, pinClassErr
 }
 
-func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinStart, done chan<- struct{}) {
+func runPinnedWindow(source image.Image, origin image.Point, edit PinEditor, started chan<- pinStart, done chan<- struct{}) {
 	runtime.LockOSThread()
 	// Retire this GUI thread on exit, including on startup failures that may
 	// leave WM_QUIT queued. Such messages must not reach another window loop.
@@ -135,18 +141,12 @@ func runPinnedWindow(source image.Image, origin image.Point, started chan<- pinS
 		return
 	}
 	bounds := pinInitialBounds(original, origin, workArea)
-	state := &pinWindowState{source: source, original: original, scale: pinScaleForSize(original, bounds.Size())}
-	state.vector, _ = source.(interface {
-		DrawToDC(uintptr, image.Point) error
-	})
-	if state.vector == nil {
-		state.pixels = make([]byte, original.X*original.Y*4)
-		if err := copyImageToBGRA(state.pixels, original.X, original.Y, source); err != nil {
-			started <- pinStart{err: err}
-			return
-		}
-		state.bitmapInfo.Header = bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(original.X), Height: -int32(original.Y), Planes: 1, BitCount: 32, Compression: biRGB, SizeImage: uint32(len(state.pixels))}
+	state := &pinWindowState{editor: edit, scale: pinScaleForSize(original, bounds.Size())}
+	if err := state.setSource(source); err != nil {
+		started <- pinStart{err: err}
+		return
 	}
+	defer func() { state.editSession.close() }()
 	title, _ := syscall.UTF16PtrFromString("screenshot-win pinned image")
 	hwnd, _, callErr := procCreateWindowEx.Call(wsExTopmost|wsExToolWindow, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), wsPopup,
 		uintptr(bounds.Min.X), uintptr(bounds.Min.Y), uintptr(bounds.Dx()), uintptr(bounds.Dy()), 0, 0, instance, 0)
@@ -184,6 +184,9 @@ func pinWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) ui
 	}
 	state := value.(*pinWindowState)
 	switch message {
+	case wmPinEditComplete:
+		state.finishEdit(hwnd)
+		return 0
 	case wmNCHitTest:
 		return htCaption
 	case wmNCLButtonDown:
@@ -253,6 +256,9 @@ func pinWindowProcedure(hwnd uintptr, message uint32, wParam, lParam uintptr) ui
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
+		if state.editSession != nil {
+			state.editSession.cancel()
+		}
 		procPostQuitMessage.Call(0)
 		return 0
 	}
@@ -298,6 +304,10 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 	}
 	defer procPinDestroyMenu.Call(menu)
 	labels := pinMenuLabels()
+	if state.editor != nil {
+		editText, _ := syscall.UTF16PtrFromString(labels.Edit)
+		procPinAppendMenu.Call(menu, mfString, pinCommandEdit, uintptr(unsafe.Pointer(editText)))
+	}
 	originalText, _ := syscall.UTF16PtrFromString(labels.OriginalSize)
 	copyText, _ := syscall.UTF16PtrFromString(labels.Copy)
 	closeText, _ := syscall.UTF16PtrFromString(labels.Close)
@@ -309,6 +319,8 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 	procSetForegroundWindow.Call(hwnd)
 	command, _, _ := procPinTrackPopupMenu.Call(menu, tpmRightButton|tpmReturnCmd, uintptr(cursor.X), uintptr(cursor.Y), 0, hwnd, 0)
 	switch command {
+	case pinCommandEdit:
+		state.beginEdit(hwnd)
 	case pinCommandOriginal:
 		if bounds, ok := pinWindowBounds(hwnd); ok {
 			state.scale = 1
@@ -316,13 +328,85 @@ func (state *pinWindowState) showContextMenu(hwnd uintptr) {
 		}
 	case pinCommandCopy:
 		if err := capture.CopyImage(state.source); err != nil {
-			message, _ := syscall.UTF16PtrFromString(err.Error())
-			title, _ := syscall.UTF16PtrFromString("screenshot-win")
-			procPinMessageBox.Call(hwnd, uintptr(unsafe.Pointer(message)), uintptr(unsafe.Pointer(title)), 0x10 /* MB_ICONERROR */)
+			showPinError(hwnd, err)
 		}
 	case pinCommandClose:
 		procDestroyWindow.Call(hwnd)
 	}
+}
+
+// Prepare the new raster before replacing the old image so an error leaves the
+// existing pin intact. Editing never changes the pin's screen bounds or scale.
+func (state *pinWindowState) setSource(source image.Image) error {
+	if source == nil || source.Bounds().Empty() {
+		return fmt.Errorf("pinned image must not be empty")
+	}
+	original := source.Bounds().Size()
+	vector, _ := source.(interface {
+		DrawToDC(uintptr, image.Point) error
+	})
+	var pixels []byte
+	var info bitmapInfo
+	if vector == nil {
+		pixels = make([]byte, original.X*original.Y*4)
+		if err := copyImageToBGRA(pixels, original.X, original.Y, source); err != nil {
+			return err
+		}
+		info.Header = bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(original.X), Height: -int32(original.Y), Planes: 1, BitCount: 32, Compression: biRGB, SizeImage: uint32(len(pixels))}
+	}
+	state.source, state.original, state.vector = source, original, vector
+	state.pixels, state.bitmapInfo, state.softwareRaster = pixels, info, false
+	return nil
+}
+
+func (state *pinWindowState) beginEdit(hwnd uintptr) {
+	if state.editor == nil || state.editSession != nil {
+		return
+	}
+	bounds, ok := pinWindowBounds(hwnd)
+	if !ok {
+		return
+	}
+	state.dragging = false
+	procReleaseCapture.Call()
+	// Hide before the editor captures the desktop to avoid baking the pin into
+	// the frozen backdrop. The source remains available for cancel and copy.
+	hideWindowForCapture(hwnd)
+	state.editSession = startPinEdit(state.editor, state.source, bounds, func() {
+		procPostMessage.Call(hwnd, wmPinEditComplete, 0, 0)
+	})
+}
+
+func (state *pinWindowState) finishEdit(hwnd uintptr) {
+	if state.editSession == nil {
+		return
+	}
+	var result pinEditResult
+	select {
+	case result = <-state.editSession.result:
+	default:
+		return
+	}
+	state.editSession.close()
+	state.editSession = nil
+	if result.err == nil && result.image != nil {
+		if result.image.Bounds().Size() != state.original {
+			result.err = fmt.Errorf("edited pin size must remain %v", state.original)
+		} else {
+			result.err = state.setSource(result.image)
+		}
+	}
+	procInvalidateRect.Call(hwnd, 0, 0)
+	procShowWindow.Call(hwnd, swShowNoActivate)
+	if result.err != nil && !errors.Is(result.err, context.Canceled) {
+		showPinError(hwnd, result.err)
+	}
+}
+
+func showPinError(hwnd uintptr, err error) {
+	message, _ := syscall.UTF16PtrFromString(err.Error())
+	title, _ := syscall.UTF16PtrFromString("screenshot-win")
+	procPinMessageBox.Call(hwnd, uintptr(unsafe.Pointer(message)), uintptr(unsafe.Pointer(title)), 0x10 /* MB_ICONERROR */)
 }
 
 func (state *pinWindowState) paint(hwnd uintptr) error {

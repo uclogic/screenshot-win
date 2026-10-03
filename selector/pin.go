@@ -1,11 +1,16 @@
 package selector
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"math"
 	"sync"
 )
+
+// PinEditor returns an edited image, or nil when editing is cancelled.
+// Bounds are the pin's current screen rectangle; source retains full resolution.
+type PinEditor func(context.Context, image.Image, image.Rectangle) (image.Image, error)
 
 const (
 	pinMinimumScale = 0.1
@@ -41,6 +46,14 @@ type PinManager struct {
 	pins   map[*Pin]struct{}
 	closed bool
 	wake   chan struct{}
+	editor PinEditor
+}
+
+// SetEditor configures editing for subsequently created pins.
+func (manager *PinManager) SetEditor(edit PinEditor) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.editor = edit
 }
 
 func NewPinManager() *PinManager {
@@ -60,8 +73,9 @@ func (manager *PinManager) Show(source image.Image, origin image.Point) (*Pin, e
 		manager.mu.Unlock()
 		return nil, fmt.Errorf("pin manager is closed")
 	}
+	edit := manager.editor
 	manager.mu.Unlock()
-	pin, err := showPinnedWindow(source, origin)
+	pin, err := showPinnedWindow(source, origin, edit)
 	if err != nil {
 		return nil, err
 	}
